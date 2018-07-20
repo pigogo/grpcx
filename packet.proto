@@ -1,0 +1,37 @@
+// Copyright (C) 2018 Kun Zhong All rights reserved.
+// Use of this source code is governed by a Licensed under the Apache License, Version 2.0 (the "License");
+
+syntax = "proto3";
+
+package grpcx;
+
+enum CompType {
+  None = 0;
+  GZip = 1;
+}
+
+enum PackType {
+  UNKNOW = 0;
+  SINI = 1;
+  SREQ = 2;
+  SRSP = 3;
+  REQ = 4;
+  RSP = 5;
+  Notify = 6;
+  PING = 7;
+  PONG = 8;
+  EOF = 9;
+  ERROR = 10;
+}
+
+message PackHeader {
+  PackType ptype = 1;
+  string methord = 2;
+  int64  sessionid = 3;
+  map<int32, bytes> metadata = 4;
+}
+
+message NetPack {
+  PackHeader header = 1;
+  bytes body = 2;
+}
