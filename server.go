@@ -158,6 +158,7 @@ func (s *Server) Serve(addrs ...string) error {
 	}()
 
 	wait.Wait()
+	<-s.ctx.Done()
 	return nil
 }
 
@@ -175,48 +176,67 @@ func (s *Server) Stop() {
 	conns := s.conns
 	s.conns = nil
 	s.serve = false
-	s.cancel()
 	s.mu.Unlock()
 
 	s.signalShutdownCond()
 	for _, conn := range conns {
 		conn.close()
 	}
+	s.cancel()
 }
 
 // GracefulStop stops the gRPC server gracefully. It stops the server from
 // accepting new connections and RPCs and blocks until all the pending RPCs are
 // finished.
-func (s *Server) GracefulStop() {
-	s.signalShutdownCond()
+func (s *Server) GracefulStop(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			xlog.Errorf("GracefulStop exception:%v", r)
+		}
+	}()
 
+	s.signalShutdownCond()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.serve == false || s.conns == nil {
+	if s.serve == false || s.conns == nil || s.drain {
+		s.mu.Unlock()
 		return
 	}
+
+	conns := s.conns
 	s.serve = false
-	s.cancel()
-	if !s.drain {
-		// close input
-		for _, c := range s.conns {
-			c.closeRead()
-		}
+	s.conns = nil
+	s.drain = true
+	s.mu.Unlock()
 
-		//wait all unary task finish
-		disDone := s.dispatcher.graceClose()
-		<-disDone
-
-		//wait all stream task finish
-		for _, c := range s.conns {
-			cdone := c.drain()
-			<-cdone
-			c.close()
-		}
-		s.drain = true
+	//notify all peers to close
+	var doneBuf []<-chan struct{}
+	for _, c := range conns {
+		done := c.gracefulClose()
+		doneBuf = append(doneBuf, done)
 	}
 
-	s.conns = nil
+loop:
+	for _, done := range doneBuf {
+		select {
+		case <-ctx.Done():
+			//context timeout: force all connection close
+			xlog.Warningf("graceful close wait timeout, force connection close")
+			for _, c := range conns {
+				c.close()
+			}
+			break loop
+		case <-done:
+			xlog.Info("graceful close done")
+		}
+	}
+
+	//wait all tasks finish
+	disDone := s.dispatcher.graceClose()
+	select {
+	case <-ctx.Done():
+	case <-disDone:
+	}
+	s.cancel()
 }
 
 func (s *Server) removeConn(id int64) {
@@ -235,6 +255,7 @@ func (s *Server) SendTo(ctx context.Context, method string, m interface{}, keys 
 
 	s.mu.RLock()
 	conn, ok := s.conns[cid]
+	s.mu.RUnlock()
 	if !ok {
 		return ErrInvalidConnid
 	}
@@ -543,6 +564,8 @@ func (s *Server) handleNetPacket(head *PackHeader, p []byte, conn Conn) (err err
 		case PackType_ERROR:
 			s.handleErrorPacket(head, p, conn)
 			break
+		case PackType_GoAway:
+			// unsupport
 		default:
 			err = fmt.Errorf("grpcx: unknow packtype:%v", head.Ptype)
 			xlog.Info(err)

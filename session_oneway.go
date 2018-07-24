@@ -60,23 +60,25 @@ func newOnewaySession(ctx context.Context, cc *ClientConn, method string, opts .
 	}
 
 	cs := &onewaySession{
-		opts:    c,
-		getConn: getConn,
-		conn:    conn,
-		method:  method,
-		state:   oneRequst,
+		opts:      c,
+		getConn:   getConn,
+		conn:      conn,
+		method:    method,
+		state:     oneRequst,
+		sessionid: cc.genStreamID(),
 	}
 
 	return cs, nil
 }
 
 type onewaySession struct {
-	opts    callInfo
-	conn    *connDial
-	method  string
-	msg     interface{}
-	header  *PackHeader
-	getConn func() (*connDial, func(), error)
+	opts      callInfo
+	conn      *connDial
+	method    string
+	msg       interface{}
+	header    *PackHeader
+	sessionid int64
+	getConn   func() (*connDial, func(), error)
 
 	err         error
 	packet      *netPack
@@ -105,8 +107,9 @@ func (cs *onewaySession) Run(args interface{}) (err error) {
 
 func (cs *onewaySession) SendMsg(m interface{}) (err error) {
 	cs.header = &PackHeader{
-		Ptype:   PackType_REQ,
-		Methord: cs.method,
+		Ptype:     PackType_REQ,
+		Methord:   cs.method,
+		Sessionid: cs.sessionid,
 	}
 	if cs.opts.token != nil {
 		cs.header.Metadata = withToken(cs.header.Metadata, *cs.opts.token)

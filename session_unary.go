@@ -6,6 +6,7 @@ package grpcx
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pigogo/grpcx/codec"
 	"golang.org/x/net/context"
@@ -87,7 +88,8 @@ func newUnarySession(ctx context.Context, cc *ClientConn, method string, opts ..
 		conn:      conn,
 		method:    method,
 		sessionid: cc.genStreamID(),
-		notify:    make(chan struct{}),
+		pnotify:   make(chan struct{}),
+		goawayCh:  make(chan struct{}),
 		state:     unaryRequst,
 	}
 
@@ -115,18 +117,24 @@ type unarySession struct {
 	method     string
 	sessionid  int64
 
-	err         error
-	mu          sync.Mutex
-	put         func()
-	finished    bool
-	notify      chan struct{}
-	packet      *netPack
-	state       unaryState
-	resendTimes int
+	err          error
+	mu           sync.Mutex
+	put          func()
+	finished     bool
+	pnotify      chan struct{}
+	notifyNotify chan struct{}
+	goawayCh     chan struct{}
+	packet       *netPack
+	state        unaryState
+	resendTimes  int
 }
 
 func (cs *unarySession) Context() context.Context {
 	return cs.ctx
+}
+
+func (cs *unarySession) streamID() int64 {
+	return cs.sessionid
 }
 
 func (cs *unarySession) Run(args, reply interface{}) (err error) {
@@ -161,19 +169,19 @@ func (cs *unarySession) SendMsg(m interface{}) (err error) {
 		Sessionid: cs.sessionid,
 		Methord:   cs.method,
 	}
+
 	if cs.opts.token != nil {
 		cs.header.Metadata = withToken(cs.header.Metadata, *cs.opts.token)
 	}
+
 	cs.msg = m
 	cs.err = cs.conn.send(cs.header, m)
 	if cs.err != nil {
 		xlog.Warningf("grpcx: SendMsg fail:%v", cs.err)
-		conn, put, e := cs.getConn()
-		if e != nil || conn == cs.conn {
-			return cs.err
+		if err = cs.switchConn(); err != nil {
+			return err
 		}
-		cs.conn, cs.put = conn, put
-		cs.connCancel, _ = conn.withSession(cs.sessionid, cs)
+
 		cs.state = unaryResendReq
 		return nil
 	}
@@ -184,21 +192,28 @@ func (cs *unarySession) SendMsg(m interface{}) (err error) {
 func (cs *unarySession) resend() error {
 	cs.resendTimes++
 	if cs.resendTimes >= maxResendTimes {
-		return cs.err
+		return fmt.Errorf("grpcx: conn error after retry %v times", cs.resendTimes)
 	}
 
 	cs.err = cs.conn.send(cs.header, cs.msg)
 	if cs.err != nil {
 		xlog.Warningf("grpcx: resend fail:%v retry times:%v", cs.err, cs.resendTimes)
-		conn, put, e := cs.getConn()
-		if e != nil || cs.conn == conn {
-			return cs.err
-		}
-		cs.conn, cs.put = conn, put
-		cs.connCancel, _ = conn.withSession(cs.sessionid, cs)
-		return nil
+		return cs.switchConn()
 	}
 	cs.state = unaryResponse
+	return nil
+}
+
+func (cs *unarySession) switchConn() error {
+	conn, put, e := cs.getConn()
+	if e != nil || conn == cs.conn {
+		cs.err = fmt.Errorf("grpcx: connection error")
+		return cs.err
+	}
+
+	cs.conn, cs.put = conn, put
+	cs.connCancel, _ = conn.withSession(cs.sessionid, cs)
+	cs.state = unaryResendReq
 	return nil
 }
 
@@ -210,19 +225,31 @@ func (cs *unarySession) RecvMsg(m interface{}) (err error) {
 	}()
 
 	select {
-	case <-cs.notify:
-	case <-cs.conn.Error():
-		cs.err = fmt.Errorf("grpcx: connection error")
-		conn, put, e := cs.getConn()
-		if e != nil || conn == cs.conn {
-			return cs.err
+	case <-cs.pnotify:
+	case <-cs.goawayCh:
+		//ongoaway::wait 100ms up until retry
+		ctx, _ := context.WithTimeout(context.Background(), time.Millisecond*100)
+		//ctx := context.Background()
+		select {
+		case <-cs.pnotify:
+			// cs.ctx timeout or receive msg from server
+			break
+		case <-cs.conn.Error():
+			// maybe conn be closed by server
+			if err = cs.switchConn(); err != nil {
+				return
+			}
+		case <-ctx.Done():
+			// wait timeout
+			if err = cs.switchConn(); err != nil {
+				return
+			}
 		}
-
-		cs.conn, cs.put = conn, put
-		cs.connCancel, _ = conn.withSession(cs.sessionid, cs)
-		cs.state = unaryResendReq
-		close(cs.notify)
-		return
+	case <-cs.conn.Error():
+		// transport error
+		if err = cs.switchConn(); err != nil {
+			return
+		}
 	}
 
 	cs.state = unaryFinish
@@ -230,18 +257,26 @@ func (cs *unarySession) RecvMsg(m interface{}) (err error) {
 		if cs.err != nil {
 			return cs.err
 		}
-		return fmt.Errorf("grpcx: unknow system error")
+		cs.err = fmt.Errorf("grpcx: unknow system error")
+		return cs.err
 	}
 
-	cs.err = nil
 	if cs.packet.head.Ptype == PackType_RSP {
-		return cs.codec.Unmarshal(cs.packet.body, m)
+		cs.err = cs.codec.Unmarshal(cs.packet.body, m)
+	} else if cs.packet.head.Ptype == PackType_ERROR {
+		cs.err = fmt.Errorf("grpcx: error reply:%v", string(cs.packet.body))
+	} else {
+		cs.err = fmt.Errorf("grpcx: unknow reply:%v", string(cs.packet.body))
 	}
+	return cs.err
+}
 
-	if cs.packet.head.Ptype == PackType_ERROR {
-		return fmt.Errorf("grpcx: error reply:%v", string(cs.packet.body))
-	}
-	return fmt.Errorf("grpcx: unknow reply:%v", string(cs.packet.body))
+func (cs *unarySession) onGoaway() {
+	defer func() {
+		recover()
+	}()
+
+	close(cs.goawayCh)
 }
 
 func (cs *unarySession) onMessage(conn Conn, head *PackHeader, body []byte) (err error) {
@@ -252,6 +287,8 @@ func (cs *unarySession) onMessage(conn Conn, head *PackHeader, body []byte) (err
 
 		if err != nil {
 			xlog.Warning(err)
+			cs.err = err
+			cs.finish()
 		}
 	}()
 
@@ -265,11 +302,16 @@ func (cs *unarySession) onMessage(conn Conn, head *PackHeader, body []byte) (err
 		return fmt.Errorf("grpcx: inner error:conn channel mix up")
 	}
 
+	if head.Ptype == PackType_GoAway {
+		cs.onGoaway()
+		return
+	}
+
 	cs.packet = &netPack{
 		head: head,
 		body: body,
 	}
-	close(cs.notify)
+	cs.closePNotify()
 	return nil
 }
 
@@ -297,8 +339,38 @@ func (cs *unarySession) finish() {
 		cs.put()
 		cs.put = nil
 	}
+
+	if cs.notifyNotify != nil {
+		cs.closeNotify()
+	}
+	cs.closePNotify()
 }
 
-func (cs *unarySession) finishNotify() <-chan struct{} {
-	return cs.notify
+func (cs *unarySession) closeNotify() {
+	defer func() {
+		recover()
+	}()
+
+	close(cs.notifyNotify)
+}
+
+func (cs *unarySession) closePNotify() {
+	defer func() {
+		recover()
+	}()
+
+	close(cs.pnotify)
+}
+
+func (cs *unarySession) done() <-chan struct{} {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.notifyNotify == nil {
+		cs.notifyNotify = make(chan struct{})
+	}
+	return cs.notifyNotify
+}
+
+func (cs *unarySession) error() error {
+	return cs.err
 }

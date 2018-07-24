@@ -61,6 +61,9 @@ type Stream interface {
 
 	// onMessage: inner use
 	onMessage(conn Conn, head *PackHeader, body []byte) (err error)
+
+	//
+	streamID() int64
 }
 
 // ClientStream defines the interface a client stream has to satisfy.

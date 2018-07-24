@@ -58,6 +58,14 @@ func main() {
 	}
 	log.Printf("Struct Greeting: %s", reply.Message)
 
+	//struct handler request
+	callctx, err := conn.BackCall(context.Background(), "raw/SayHello", &pb.HelloRequest{Name: name}, reply)
+	if err != nil {
+		log.Fatalf("could not greet: %v", err)
+	}
+	<-callctx.Done()
+	log.Printf("Back Struct Greeting: %s timeusage:%v", reply.Message, callctx.TimePass())
+
 	//oneway handler request
 	waitNotifyDone.Add(1)
 	err = conn.Send(context.Background(), "oneway/SayHello", &pb.HelloRequest{Name: name})

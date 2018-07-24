@@ -76,6 +76,11 @@ func (ss *serverStream) onMessage(conn Conn, head *PackHeader, body []byte) (err
 	if ss.conn != conn {
 		err = fmt.Errorf("grpcx: serverStream::onMessage unknow error:conn mix up")
 		xlog.Error(err)
+
+		ss.buf.put(&netPack{
+			head: head,
+			body: []byte(err.Error()),
+		})
 		return
 	}
 

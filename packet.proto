@@ -22,6 +22,7 @@ enum PackType {
   PONG = 8;
   EOF = 9;
   ERROR = 10;
+  GoAway = 11;  //notify the peer that try to gracefulclose
 }
 
 message PackHeader {

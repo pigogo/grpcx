@@ -4,8 +4,9 @@
 package grpcx
 
 import (
-	"golang.org/x/net/context"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 // CallContext is the async rpc request info
@@ -16,7 +17,7 @@ type CallContext struct {
 
 // Done indicate the request is finish
 func (cc *CallContext) Done() <-chan struct{} {
-	return cc.us.finishNotify()
+	return cc.us.done()
 }
 
 // Error return the requestion error
@@ -75,14 +76,4 @@ func (cc *ClientConn) Send(ctx context.Context, method string, args interface{},
 	}
 
 	return os.Run(args)
-}
-
-// SendRaw raw oneway request
-func (cc *ClientConn) SendRaw(ctx context.Context, msg []byte) error {
-	raw, err := newRawSession(ctx, cc)
-	if err != nil {
-		return err
-	}
-
-	return raw.Run(msg)
 }

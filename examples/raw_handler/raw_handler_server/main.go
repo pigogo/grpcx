@@ -3,6 +3,9 @@ package main
 import (
 	"log"
 
+	"net/http"
+	_ "net/http/pprof"
+
 	grpc "github.com/pigogo/grpcx"
 )
 
@@ -15,6 +18,7 @@ var (
 )
 
 func main() {
+	go http.ListenAndServe("0.0.0.0:1234", nil)
 	srv = grpc.NewServer()
 	if err := srv.RegistHandler("/raw/SayHello", SayHello, true); err != nil {
 		panic(err)

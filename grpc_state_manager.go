@@ -42,6 +42,8 @@ const (
 	Draining
 	// Shutdown indicates the ClientConn has started shutting down.
 	Shutdown
+	// Goaway indicates server is on closing
+	Goaway
 )
 
 func (s ConnectivityState) String() string {
@@ -56,6 +58,8 @@ func (s ConnectivityState) String() string {
 		return "TRANSIENT_FAILURE"
 	case Shutdown:
 		return "SHUTDOWN"
+	case Goaway:
+		return "GOAWAY"
 	default:
 		panic(fmt.Sprintf("unknown connectivity state: %d", s))
 	}
@@ -76,7 +80,7 @@ type ConnectivityStateManager struct {
 func (csm *ConnectivityStateManager) UpdateState(state ConnectivityState) bool {
 	csm.mu.Lock()
 	defer csm.mu.Unlock()
-	if csm.state == Shutdown {
+	if csm.state == Shutdown || (csm.state == Goaway && state != Shutdown) {
 		return false
 	}
 	if csm.state == state {

@@ -31,7 +31,7 @@ type connDial struct {
 	conn           net.Conn
 	csm            ConnectivityStateManager
 	drainDone      chan struct{}
-	draining       bool
+	goawayDone     chan struct{}
 	closed         bool
 	copts          callInfo
 	opts           dialOptions
@@ -140,6 +140,10 @@ func (dconn *connDial) setState(state ConnectivityState) bool {
 				dconn.errch = nil
 			}
 			dconn.input.Reset()
+		case Goaway:
+			if dconn.down != nil {
+				dconn.down(nil)
+			}
 		}
 		return true
 	}
@@ -161,14 +165,14 @@ func (dconn *connDial) dial() (err error) {
 
 	dconn.conn, err = net.Dial("tcp4", dconn.netaddr)
 	if err != nil {
-		xlog.Warning("grpcx: dial:%v error:%v", dconn.netaddr, err)
+		xlog.Warningf("grpcx: dial:%v error:%v", dconn.netaddr, err)
 		return
 	}
 
 	if dconn.opts.creds != nil {
 		dconn.conn, _, err = dconn.opts.creds.ClientHandshake(dconn.ctx, dconn.netaddr, dconn.conn)
 		if err != nil {
-			xlog.Warning("grpcx: tls client handshake with:%v error:%v", dconn.netaddr, err)
+			xlog.Warningf("grpcx: tls client handshake with:%v error:%v", dconn.netaddr, err)
 			return
 		}
 	}
@@ -205,16 +209,47 @@ func (dconn *connDial) close() {
 		dconn.conn.Close()
 		dconn.conn = nil
 	}
+
+	dconn.closeGoawayDone()
+	dconn.closeGoawayDone()
 	dconn.up = nil
 	dconn.down = nil
 	dconn.csm.cse = nil
 }
 
-func (dconn *connDial) closeWrite() {
+func (dconn *connDial) closeGraceDone() {
+	defer func() {
+		recover()
+	}()
+
+	close(dconn.drainDone)
+}
+
+func (dconn *connDial) closeGoawayDone() {
+	defer func() {
+		recover()
+	}()
+
+	close(dconn.goawayDone)
+}
+
+func (dconn *connDial) gracefulClose() <-chan struct{} {
 	dconn.mux.Lock()
 	defer dconn.mux.Unlock()
-	if dconn.closed {
-		return
+	if dconn.drainDone != nil {
+		return dconn.drainDone
+	} else if dconn.goawayDone != nil {
+		return dconn.goawayDone
+	} else if dconn.closed {
+		drainDone := make(chan struct{})
+		close(drainDone)
+		return drainDone
+	}
+
+	dconn.drainDone = make(chan struct{})
+	if len(dconn.connMap) == 0 {
+		close(dconn.drainDone)
+		return dconn.drainDone
 	}
 
 	// close all stream session
@@ -222,27 +257,6 @@ func (dconn *connDial) closeWrite() {
 		if cstream, ok := session.(*clientStream); ok {
 			cstream.CloseSend()
 		}
-	}
-
-	dconn.conn.(*net.TCPConn).CloseWrite()
-}
-
-func (dconn *connDial) drain() <-chan struct{} {
-	dconn.mux.Lock()
-	defer dconn.mux.Unlock()
-	if dconn.draining {
-		return dconn.drainDone
-	} else if dconn.closed {
-		drainDone := make(chan struct{})
-		close(drainDone)
-		return drainDone
-	}
-
-	dconn.draining = true
-	dconn.drainDone = make(chan struct{})
-	if len(dconn.connMap) == 0 {
-		close(dconn.drainDone)
-		return dconn.drainDone
 	}
 
 	return dconn.drainDone
@@ -287,6 +301,8 @@ func (dconn *connDial) Wait(ctx context.Context, hasBalancer, failfast bool) err
 
 		switch state {
 		case Shutdown:
+			fallthrough
+		case Goaway:
 			if failfast || !hasBalancer {
 				return errNetworkIO
 			}
@@ -324,12 +340,14 @@ func (dconn *connDial) withSession(id int64, val Stream) (func(), error) {
 
 	return func() {
 		dconn.mux.Lock()
-		defer dconn.mux.Unlock()
-
 		delete(dconn.connMap, id)
-		if dconn.draining && len(dconn.connMap) == 0 {
-			close(dconn.drainDone)
+		//on draining: close when no session exist
+		if (dconn.drainDone != nil || dconn.goawayDone != nil) && len(dconn.connMap) == 0 {
+			dconn.mux.Unlock()
+			dconn.close()
+			return
 		}
+		dconn.mux.Unlock()
 	}, nil
 }
 
@@ -451,6 +469,8 @@ func (dconn *connDial) read() (err error) {
 
 		if header.Ptype == PackType_SRSP {
 			dconn.handlePacket(header, msg)
+		} else if header.Ptype == PackType_GoAway {
+			dconn.handleGoAway(header)
 		} else {
 			go dconn.handlePacket(header, msg)
 		}
@@ -470,9 +490,30 @@ func (dconn *connDial) handlePacket(header *PackHeader, packet []byte) {
 
 	stream := dconn.sessionOf(header.Sessionid)
 	if stream == nil {
-		xlog.Warning("grpcx: handlePacket stream timeout:%v", header.Sessionid)
+		xlog.Warningf("grpcx: handlePacket stream timeout:%v", header.Sessionid)
 		return
 	}
 
 	stream.onMessage(dconn, header, packet)
+}
+
+func (dconn *connDial) handleGoAway(head *PackHeader) {
+	dconn.mux.Lock()
+	//no waiting task: close directory
+	if len(dconn.connMap) == 0 {
+		dconn.mux.Unlock()
+		dconn.close()
+		return
+	}
+
+	defer dconn.mux.Unlock()
+	if dconn.setState(Goaway) != true {
+		return
+	}
+
+	dconn.goawayDone = make(chan struct{})
+	//notify on serving task
+	for _, session := range dconn.connMap {
+		session.onMessage(dconn, head, []byte{})
+	}
 }

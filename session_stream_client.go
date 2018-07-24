@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 
 	"github.com/pigogo/grpcx/codec"
 	"golang.org/x/net/context"
@@ -15,7 +14,6 @@ import (
 )
 
 // NewClientStream creates a new Stream for the client side. This is called
-// by generated code000000000000000000000.0
 func NewClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, method string, opts ...CallOption) (_ ClientStream, err error) {
 	return newClientStream(ctx, desc, cc, method, opts...)
 }
@@ -124,12 +122,10 @@ type clientStream struct {
 	connCancel func()
 	err        error
 
-	mu         sync.Mutex
-	put        func()
-	sendClosed int32
-	finished   bool
-	method     string
-	once       sync.Once
+	mu       sync.Mutex
+	put      func()
+	finished bool
+	method   string
 }
 
 func (cs *clientStream) init() error {
@@ -142,6 +138,10 @@ func (cs *clientStream) init() error {
 
 func (cs *clientStream) Context() context.Context {
 	return cs.ctx
+}
+
+func (cs *clientStream) streamID() int64 {
+	return cs.sessionid
 }
 
 func (cs *clientStream) SendMsg(m interface{}) (err error) {
@@ -168,10 +168,6 @@ func (cs *clientStream) SendMsg(m interface{}) (err error) {
 		return cs.err
 	}
 
-	if atomic.LoadInt32(&cs.sendClosed) > 0 {
-		return io.EOF
-	}
-
 	head := &PackHeader{
 		Ptype:     PackType_SREQ,
 		Sessionid: cs.sessionid,
@@ -188,9 +184,9 @@ func (cs *clientStream) send(head *PackHeader, m interface{}) (err error) {
 func (cs *clientStream) RecvMsg(m interface{}) (err error) {
 	defer func() {
 		if err != nil {
-			cs.finish()
 			if err != io.EOF {
-				xlog.Errorf("grpcx: clientStream RecvMsg fail:%v", err)
+				xlog.Errorf("grpcx: clientStream RecvMsg fail:%v sessionid:%v", err, cs.sessionid)
+				cs.finish()
 			}
 		}
 	}()
@@ -203,17 +199,21 @@ func (cs *clientStream) RecvMsg(m interface{}) (err error) {
 	case <-cs.ctx.Done():
 		select {
 		case msg = <-cs.buf.get():
-			err = cs.ctx.Err()
+			cs.buf.load()
 			break
 		default:
-			return cs.ctx.Err()
+			err = cs.err
+			if err == nil {
+				return cs.ctx.Err()
+			}
+			return
 		}
 	}
 
 	if msg.head.Ptype == PackType_EOF {
 		return io.EOF
-	} else if msg.head.Ptype == PackType_ERROR {
-		return fmt.Errorf("grpcx: get error from server")
+	} else if msg.head.Ptype == PackType_ERROR || msg.head.Ptype == PackType_GoAway {
+		return cs.err
 	}
 
 	err = cs.codec.Unmarshal(msg.body, m)
@@ -230,7 +230,10 @@ func (cs *clientStream) RecvMsg(m interface{}) (err error) {
 			err = fmt.Errorf("grpcx: connection error")
 			break
 		case <-cs.ctx.Done():
-			err = cs.ctx.Err()
+			err = cs.err
+			if err == nil {
+				err = cs.ctx.Err()
+			}
 		}
 
 		if err != nil || msg.head.Ptype != PackType_EOF {
@@ -253,11 +256,6 @@ func (cs *clientStream) CloseSend() (err error) {
 
 	if cs.err != nil {
 		return cs.err
-	}
-
-	if atomic.AddInt32(&cs.sendClosed, 1) > 1 {
-		//warming: already closed
-		return nil
 	}
 
 	head := &PackHeader{
@@ -299,9 +297,18 @@ func (cs *clientStream) finish() {
 
 func (cs *clientStream) onMessage(conn Conn, head *PackHeader, body []byte) error {
 	if cs.conn != conn {
-		err := fmt.Errorf("grpcx clientStream::onMessage unknow error:conn mix up")
-		xlog.Error(err)
-		return err
+		cs.err = fmt.Errorf("grpcx clientStream::onMessage unknow error:conn mix up")
+		xlog.Error(cs.err)
+
+		cs.buf.put(&netPack{
+			head: head,
+			body: []byte(cs.err.Error()),
+		})
+		return cs.err
+	} else if head.Ptype == PackType_ERROR {
+		cs.err = fmt.Errorf("grpcx: receive srv error")
+	} else if head.Ptype == PackType_GoAway {
+		cs.err = errSrvGoaway
 	}
 
 	cs.buf.put(&netPack{
@@ -309,7 +316,7 @@ func (cs *clientStream) onMessage(conn Conn, head *PackHeader, body []byte) erro
 		body: body,
 	})
 
-	if head.Ptype == PackType_EOF || head.Ptype == PackType_ERROR {
+	if head.Ptype != PackType_SRSP {
 		cs.finish()
 	}
 	return nil

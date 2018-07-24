@@ -98,6 +98,7 @@ func (cc *ClientConn) lbWatcher(doneChan chan struct{}) {
 	for addrs := range cc.dopts.balancer.Notify() {
 		var (
 			add []string // Addresses need to setup connections.
+			del []Conn   // Address need to drain
 		)
 		cc.mu.Lock()
 		for _, a := range addrs {
@@ -114,15 +115,13 @@ func (cc *ClientConn) lbWatcher(doneChan chan struct{}) {
 				}
 			}
 			if !keep {
-				c.closeWrite()
-				cc.waitCloseConn[k] = waitCloseConn{
-					deedline: time.Now().Add(time.Second * 15),
-					conn:     c,
-				}
+				del = append(del, c)
 				delete(cc.conns, k)
 			}
 		}
 		cc.mu.Unlock()
+
+		// add new connection
 		for _, a := range add {
 			var err error
 			if doneChan != nil {
@@ -138,37 +137,28 @@ func (cc *ClientConn) lbWatcher(doneChan chan struct{}) {
 				xlog.Warningf("Error creating connection to %v. Err: %v", a, err)
 			}
 		}
-	}
-}
 
-func (cc *ClientConn) waitCloseWatch() {
-	ticker := time.NewTicker(time.Second * 3)
-	var waitClose []waitCloseConn
-loop:
-	for {
-		select {
-		case <-cc.ctx.Done():
-			break loop
-		case <-ticker.C:
-			cc.mu.RLock()
-			for _, conn := range cc.waitCloseConn {
-				if time.Now().After(conn.deedline) {
-					waitClose = append(waitClose, conn)
+		// remove del connection
+		var dones []<-chan struct{}
+		for _, conn := range del {
+			done := conn.gracefulClose()
+			dones = append(dones, done)
+		}
+
+		ctx, _ := context.WithTimeout(context.Background(), time.Minute)
+	loop:
+		for _, done := range dones {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				// timeout waiting: force all connection close
+				for _, conn := range del {
+					conn.close()
 				}
+				break loop
 			}
-			cc.mu.RLock()
-
-			for _, conn := range waitClose {
-				done := conn.conn.drain()
-				<-done
-				conn.conn.close()
-			}
-
-			waitClose = waitClose[:0]
 		}
 	}
-
-	ticker.Stop()
 }
 
 // resetAddrConn creates an Conn for addr and adds it to cc.conns.

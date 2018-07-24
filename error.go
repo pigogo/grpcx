@@ -19,6 +19,8 @@ var (
 	errConnUnavailable = errors.New("grpcx: the connection is unavailable")
 	// errConnClosing indicates that the connection is closing.
 	errConnClosing = errors.New("grpcx: the connection is closing")
+	// errConnGoaway indicates that the server is closing
+	errSrvGoaway = errors.New("grpcx: the server is closing")
 	// errBalancerClosed indicates that the balancer is closed.
 	errBalancerClosed = errors.New("grpcx: balancer is closed")
 )

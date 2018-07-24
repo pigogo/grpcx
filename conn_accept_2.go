@@ -5,7 +5,7 @@
 // connAccept2 takes a buffer to hold the outbound packet in order to reduce the network
 // flushing op wich is exclusive and take more time when the connection cross datacenter
 // so connAccept2 is more suitable for the call which is cross datacenter and the connection is shared
-// for diff calls in business layer 
+// for diff calls in business layer
 package grpcx
 
 import (
@@ -21,7 +21,6 @@ import (
 )
 
 type connAccept2 struct {
-	connAccept
 	buf           *putBuffer
 	id            int64
 	ctx           context.Context
@@ -29,12 +28,13 @@ type connAccept2 struct {
 	mux           sync.RWMutex
 	opts          options
 	connMap       map[int64]Stream
+	maxStreamID   int64
 	conn          net.Conn
 	lastAliveTime time.Time
 	lastPoneTime  time.Time
-	draining      bool
 	closed        bool
-	drainDone     chan struct{}
+	tick          *time.Ticker
+	graceDone     chan struct{}
 	onPacket      func(head *PackHeader, body []byte, conn Conn) error
 	onClose       func(int64)
 }
@@ -54,6 +54,7 @@ func newAcceptConn2(id int64, opts options, conn net.Conn, onPacket func(head *P
 	go aconn.read()
 	go aconn.write()
 	if opts.keepalivePeriod > 0 {
+		aconn.tick = time.NewTicker(opts.keepalivePeriod)
 		go aconn.aliveLook()
 	}
 	return aconn
@@ -74,6 +75,12 @@ func (aconn *connAccept2) close() {
 	if aconn.opts.connPlugin != nil {
 		aconn.opts.connPlugin.OnPostDisconnect(aconn)
 	}
+
+	aconn.closeGraceDone()
+	if aconn.tick != nil {
+		aconn.tick.Stop()
+		aconn.tick = nil
+	}
 }
 
 func (aconn *connAccept2) onclose() {
@@ -90,57 +97,51 @@ func (aconn *connAccept2) onclose() {
 		aconn.opts.connPlugin.OnPostDisconnect(aconn)
 	}
 	aconn.onClose(aconn.id)
+	aconn.closeGraceDone()
+	if aconn.tick != nil {
+		aconn.tick.Stop()
+		aconn.tick = nil
+	}
 }
 
-func (aconn *connAccept2) closeRead() {
-	aconn.mux.Lock()
-	defer aconn.mux.Unlock()
-	if aconn.closed {
-		return
-	}
-	aconn.conn.(*net.TCPConn).CloseRead()
+func (aconn *connAccept2) closeGraceDone() {
+	defer func() {
+		recover()
+	}()
+
+	close(aconn.graceDone)
 }
 
 func (aconn *connAccept2) context() context.Context {
 	return aconn.ctx
 }
 
-func (aconn *connAccept2) drain() <-chan struct{} {
+func (aconn *connAccept2) gracefulClose() <-chan struct{} {
 	aconn.mux.Lock()
 	defer aconn.mux.Unlock()
-	if aconn.draining {
-		return aconn.drainDone
-	} else if aconn.closed {
-		drainDone := make(chan struct{})
-		close(drainDone)
-		return drainDone
+	if aconn.closed {
+		graceDone := make(chan struct{})
+		close(graceDone)
+		return graceDone
 	}
 
-	aconn.draining = true
-	aconn.drainDone = make(chan struct{})
-	if len(aconn.connMap) == 0 {
-		close(aconn.drainDone)
-		return aconn.drainDone
+	if aconn.graceDone != nil {
+		return aconn.graceDone
 	}
 
-	//put eof packet
-	eofHeader := &PackHeader{
-		Ptype: PackType_EOF,
-	}
-	for _, session := range aconn.connMap {
-		session.onMessage(aconn, eofHeader, nil)
-	}
-	return aconn.drainDone
+	aconn.graceDone = make(chan struct{})
+	aconn.notifyGoaway()
+	return aconn.graceDone
 }
 
 func (aconn *connAccept2) withSession(id int64, session Stream) (func(), error) {
 	aconn.mux.Lock()
 	defer aconn.mux.Unlock()
 
-	if aconn.draining {
+	/*if aconn.draining { todo:
 		xlog.Info("grpcx: withSession connAccept2 when connection is draining")
 		return nil, errDraining
-	}
+	}*/
 
 	if _, ok := aconn.connMap[id]; ok {
 		xlog.Warningf("grpcx: connAccept2 session is exist:%v", id)
@@ -151,11 +152,13 @@ func (aconn *connAccept2) withSession(id int64, session Stream) (func(), error) 
 
 	return func() {
 		aconn.mux.Lock()
-		defer aconn.mux.Unlock()
 		delete(aconn.connMap, id)
-		if aconn.draining && len(aconn.connMap) == 0 {
-			close(aconn.drainDone)
+		if aconn.graceDone != nil && len(aconn.connMap) == 0 {
+			aconn.mux.Unlock()
+			aconn.close()
+			return
 		}
+		aconn.mux.Unlock()
 	}, nil
 }
 
@@ -187,7 +190,9 @@ func (aconn *connAccept2) write() (err error) {
 			err = fmt.Errorf("%v", r)
 			xlog.Infof("grpcx: connAccept2 write exist with recover error:%v", err)
 		}
-		aconn.onclose()
+		if err != nil {
+			aconn.onclose()
+		}
 	}()
 
 	var msg *outPack
@@ -248,28 +253,35 @@ func (aconn *connAccept2) read() (err error) {
 			continue
 		}
 
+		if aconn.maxStreamID < header.Sessionid {
+			aconn.maxStreamID = header.Sessionid
+		} else {
+			//todo:
+		}
+
 		aconn.onPacket(header, msg, aconn)
 	}
 }
 
-func (aconn *connAccept2) aliveLook() {
-	tick := time.NewTicker(aconn.opts.keepalivePeriod)
-	defer tick.Stop()
+func (aconn *connAccept2) notifyGoaway() {
+	goawayHead := &PackHeader{
+		Ptype:     PackType_GoAway,
+		Sessionid: aconn.maxStreamID,
+	}
 
+	if aconn.send(goawayHead, nil) != nil {
+		aconn.closeGraceDone()
+	}
+}
+func (aconn *connAccept2) aliveLook() {
+	tick := aconn.tick
 	for {
-		<-tick.C
-		select {
-		case <-tick.C:
-		case <-aconn.ctx.Done():
+		_, ok := <-tick.C
+		if !ok {
 			return
 		}
 
 		aconn.mux.Lock()
-		if aconn.draining || aconn.closed {
-			aconn.mux.Unlock()
-			return
-		}
-
 		//timeout
 		if time.Since(aconn.lastAliveTime) > aconn.opts.keepalivePeriod {
 			aconn.mux.Unlock()
