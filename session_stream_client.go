@@ -49,6 +49,8 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 	gopts := BalancerGetOptions{
 		BlockingWait: !c.failFast,
 	}
+
+	var cs *clientStream
 	for {
 		conn, put, err = cc.getConn(ctx, gopts)
 		if err != nil {
@@ -62,28 +64,31 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 			return
 		}
 
+		if cs == nil {
+			cs = &clientStream{
+				opts:   opts,
+				c:      c,
+				desc:   desc,
+				codec:  cc.dopts.codec,
+				cancel: cancel,
+				ctx:    sctx,
+				buf:    newRecvBuffer(),
+
+				put:       put,
+				conn:      conn,
+				method:    method,
+				sessionid: cc.genStreamID(),
+			}
+		} else {
+			cs.conn, cs.put = conn, put
+		}
+
+		cs.connCancel, err = conn.withSession(cs.sessionid, cs)
+		if err != nil {
+			xlog.Errorf("grpcx: newClientStream save session fail:%v", err)
+			continue
+		}
 		break
-	}
-
-	cs := &clientStream{
-		opts:   opts,
-		c:      c,
-		desc:   desc,
-		codec:  cc.dopts.codec,
-		cancel: cancel,
-		ctx:    sctx,
-		buf:    newRecvBuffer(),
-
-		put:       put,
-		conn:      conn,
-		method:    method,
-		sessionid: cc.genStreamID(),
-	}
-
-	cs.connCancel, err = conn.withSession(cs.sessionid, cs)
-	if err != nil {
-		xlog.Errorf("grpcx: newClientStream save session fail:%v", err)
-		return nil, err
 	}
 
 	if err = cs.init(); err != nil {

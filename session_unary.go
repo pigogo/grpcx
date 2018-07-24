@@ -72,28 +72,42 @@ func newUnarySession(ctx context.Context, cc *ClientConn, method string, opts ..
 			return conn, put, err
 		}
 	}
-	conn, put, err = getConn()
-	if err != nil {
-		xlog.Warningf("grpcx: newUnarySession getConn fail:%v", err)
-		return nil, err
+
+	var cs *unarySession
+	for {
+		conn, put, err = getConn()
+		if err != nil {
+			xlog.Warningf("grpcx: newUnarySession getConn fail:%v", err)
+			return nil, err
+		}
+
+		if cs == nil {
+			cs = &unarySession{
+				opts:      c,
+				codec:     cc.dopts.codec,
+				cancel:    cancel,
+				ctx:       ctx,
+				getConn:   getConn,
+				put:       put,
+				conn:      conn,
+				method:    method,
+				sessionid: cc.genStreamID(),
+				pnotify:   make(chan struct{}),
+				goawayCh:  make(chan struct{}),
+				state:     unaryRequst,
+			}
+		} else {
+			cs.put, cs.conn = put, conn
+		}
+
+		cs.connCancel, err = conn.withSession(cs.sessionid, cs)
+		if err == nil {
+			break
+		} else {
+			xlog.Warningf("grpcx: conn withSession error:%v", err)
+		}
 	}
 
-	cs := &unarySession{
-		opts:      c,
-		codec:     cc.dopts.codec,
-		cancel:    cancel,
-		ctx:       ctx,
-		getConn:   getConn,
-		put:       put,
-		conn:      conn,
-		method:    method,
-		sessionid: cc.genStreamID(),
-		pnotify:   make(chan struct{}),
-		goawayCh:  make(chan struct{}),
-		state:     unaryRequst,
-	}
-
-	cs.connCancel, _ = conn.withSession(cs.sessionid, cs)
 	go func() {
 		select {
 		case <-cs.ctx.Done():

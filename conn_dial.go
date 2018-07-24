@@ -215,6 +215,7 @@ func (dconn *connDial) close() {
 	dconn.up = nil
 	dconn.down = nil
 	dconn.csm.cse = nil
+	dconn.reconnectTimer.Stop()
 }
 
 func (dconn *connDial) closeGraceDone() {
@@ -246,6 +247,7 @@ func (dconn *connDial) gracefulClose() <-chan struct{} {
 		return drainDone
 	}
 
+	dconn.reconnectTimer.Stop()
 	dconn.drainDone = make(chan struct{})
 	if len(dconn.connMap) == 0 {
 		close(dconn.drainDone)
@@ -331,6 +333,10 @@ func (dconn *connDial) withSession(id int64, val Stream) (func(), error) {
 	dconn.mux.Lock()
 	defer dconn.mux.Unlock()
 
+	if dconn.goawayDone != nil {
+		return nil, errDraining
+	}
+
 	if _, ok := dconn.connMap[id]; ok {
 		xlog.Warningf("grpcx: connDial session exist:%v", id)
 		return nil, errKeyExist
@@ -376,7 +382,10 @@ loop:
 		select {
 		case <-dconn.ctx.Done():
 			break loop
-		case <-dconn.reconnectTimer.C:
+		case _, ok := <-dconn.reconnectTimer.C:
+			if !ok { // receive goaway
+				break loop
+			}
 			if dconn.dial() == nil {
 				dconn.setState(Ready)
 				resetPeriod = time.Second
@@ -392,7 +401,6 @@ loop:
 			dconn.aliveCheck()
 		}
 	}
-	dconn.reconnectTimer.Stop()
 	aliveTick.Stop()
 }
 
