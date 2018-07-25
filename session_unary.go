@@ -189,7 +189,7 @@ func (cs *unarySession) SendMsg(m interface{}) (err error) {
 	}
 
 	cs.msg = m
-	cs.err = cs.conn.send(cs.header, m)
+	cs.err = cs.conn.send(cs.header, m, *cs.opts.maxSendMessageSize)
 	if cs.err != nil {
 		xlog.Warningf("grpcx: SendMsg fail:%v", cs.err)
 		if err = cs.switchConn(); err != nil {
@@ -209,7 +209,7 @@ func (cs *unarySession) resend() error {
 		return fmt.Errorf("grpcx: conn error after retry %v times", cs.resendTimes)
 	}
 
-	cs.err = cs.conn.send(cs.header, cs.msg)
+	cs.err = cs.conn.send(cs.header, cs.msg, *cs.opts.maxSendMessageSize)
 	if cs.err != nil {
 		xlog.Warningf("grpcx: resend fail:%v retry times:%v", cs.err, cs.resendTimes)
 		return cs.switchConn()
@@ -280,7 +280,7 @@ func (cs *unarySession) RecvMsg(m interface{}) (err error) {
 	} else if cs.packet.head.Ptype == PackType_ERROR {
 		cs.err = fmt.Errorf("grpcx: error reply:%v", string(cs.packet.body))
 	} else {
-		cs.err = fmt.Errorf("grpcx: unknow reply:%v", string(cs.packet.body))
+		cs.err = fmt.Errorf("grpcx: unknow reply:%v", cs.packet.head.Ptype)
 	}
 	return cs.err
 }

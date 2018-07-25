@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"net"
 	"reflect"
 	"sync"
@@ -45,37 +44,15 @@ type connDial struct {
 }
 
 func newDialConn(ctx context.Context, netaddr string, opts dialOptions, cse *ConnectivityStateEvaluator, up func() (down func(error))) (*connDial, error) {
-	if opts.connPlugin != nil {
-		opts.connPlugin.OnPreConnect(netaddr)
-	}
-	conn, err := net.DialTimeout("tcp4", netaddr, time.Millisecond*100)
-	resetPeriod := infinitTime
-	if err != nil {
-		resetPeriod = time.Second
-		xlog.Warning("grpcx: dial:%v error:%v", netaddr, err)
-	} else if opts.creds != nil {
-		conn, _, err = opts.creds.ClientHandshake(ctx, netaddr, conn)
-		if err != nil {
-			xlog.Warning("grpcx: tls client handshake with:%v error:%v", netaddr, err)
-			return nil, err
-		}
-	}
-
 	dconn := &connDial{
 		opts:           opts,
 		netaddr:        netaddr,
-		conn:           conn,
 		input:          new(bytes.Buffer),
-		reconnectTimer: time.NewTimer(resetPeriod),
+		reconnectTimer: time.NewTimer(infinitTime),
 		connMap:        make(map[int64]Stream),
 		up:             up,
-		lastAliveTime:  time.Now(),
 	}
 
-	dopt := MaxCallRecvMsgSize(defaultClientMaxReceiveMessageSize)
-	dopt.before(&dconn.copts)
-	dopt = MaxCallSendMsgSize(defaultClientMaxSendMessageSize)
-	dopt.before(&dconn.copts)
 	for _, op := range opts.callOptions {
 		op.before(&dconn.copts)
 	}
@@ -83,10 +60,6 @@ func newDialConn(ctx context.Context, netaddr string, opts dialOptions, cse *Con
 	dconn.ctx, dconn.cancel = context.WithCancel(ctx)
 	dconn.ctx = withConnAddr(dconn.ctx, netaddr)
 	dconn.csm.cse = cse
-	if conn != nil {
-		dconn.setState(Ready)
-		go dconn.read()
-	}
 	go dconn.reconnectMonitor()
 	return dconn, nil
 }
@@ -119,7 +92,7 @@ func (dconn *connDial) setState(state ConnectivityState) bool {
 			}
 
 			dconn.input.Reset() //clean input buffer
-			dconn.resetReconnectTimer(time.Second * 3)
+			dconn.resetReconnectTimer(time.Second)
 			if dconn.errch != nil {
 				close(dconn.errch)
 				dconn.errch = nil
@@ -151,28 +124,34 @@ func (dconn *connDial) setState(state ConnectivityState) bool {
 }
 
 func (dconn *connDial) dial() (err error) {
-	if dconn.GetState() == Shutdown {
-		return io.ErrClosedPipe
+	if err = dconn.redial(); err != nil {
+		dconn.resetReconnectTimer(time.Second)
+	} else {
+		go dconn.read()
+		dconn.setState(Ready)
 	}
+	return
+}
 
-	if dconn.conn != nil {
-		return nil
+func (dconn *connDial) redial() (err error) {
+	if dconn.GetState() == Shutdown {
+		return errConnClosing
 	}
 
 	if dconn.opts.connPlugin != nil {
 		dconn.opts.connPlugin.OnPreConnect(dconn.netaddr)
 	}
 
-	dconn.conn, err = net.Dial("tcp4", dconn.netaddr)
+	dconn.conn, err = net.DialTimeout("tcp4", dconn.netaddr, dconn.opts.timeout)
 	if err != nil {
-		xlog.Warningf("grpcx: dial:%v error:%v", dconn.netaddr, err)
+		xlog.Errorf("grpcx: dial:%v error:%v", dconn.netaddr, err)
 		return
 	}
 
 	if dconn.opts.creds != nil {
 		dconn.conn, _, err = dconn.opts.creds.ClientHandshake(dconn.ctx, dconn.netaddr, dconn.conn)
 		if err != nil {
-			xlog.Warningf("grpcx: tls client handshake with:%v error:%v", dconn.netaddr, err)
+			xlog.Errorf("grpcx: tls client handshake with:%v error:%v", dconn.netaddr, err)
 			return
 		}
 	}
@@ -180,6 +159,7 @@ func (dconn *connDial) dial() (err error) {
 	if dconn.opts.connPlugin != nil {
 		dconn.opts.connPlugin.OnPostConnect(dconn)
 	}
+	dconn.lastAliveTime = time.Now()
 	return
 }
 
@@ -338,12 +318,11 @@ func (dconn *connDial) withSession(id int64, val Stream) (func(), error) {
 	}
 
 	if _, ok := dconn.connMap[id]; ok {
-		xlog.Warningf("grpcx: connDial session exist:%v", id)
+		xlog.Errorf("grpcx: connDial session exist:%v", id)
 		return nil, errKeyExist
 	}
 
 	dconn.connMap[id] = val
-
 	return func() {
 		dconn.mux.Lock()
 		delete(dconn.connMap, id)
@@ -386,16 +365,16 @@ loop:
 			if !ok { // receive goaway
 				break loop
 			}
-			if dconn.dial() == nil {
+			if dconn.redial() == nil {
 				dconn.setState(Ready)
 				resetPeriod = time.Second
 				go dconn.read()
 			} else {
-				dconn.resetReconnectTimer(resetPeriod)
 				resetPeriod *= 2
 				if resetPeriod > time.Second*15 {
 					resetPeriod = time.Second * 15
 				}
+				dconn.resetReconnectTimer(resetPeriod)
 			}
 		case <-aliveTick.C:
 			dconn.aliveCheck()
@@ -406,6 +385,10 @@ loop:
 
 func (dconn *connDial) aliveCheck() {
 	if dconn.opts.keepalivePeriod == 0 {
+		return
+	}
+
+	if dconn.GetState() != Ready {
 		return
 	}
 
@@ -420,17 +403,17 @@ func (dconn *connDial) aliveCheck() {
 		Ptype:     PackType_PING,
 		Sessionid: dconn.pingSid,
 	}
-	dconn.send(aliveReq, nil)
+	dconn.send(aliveReq, nil, defaultSendMessageSize)
 }
 
-func (dconn *connDial) send(head *PackHeader, m interface{}) error {
+func (dconn *connDial) send(head *PackHeader, m interface{}, maxMsgSize int) error {
 	mtype := reflect.TypeOf(m)
 	cbuf := getBufferFromPool(mtype)
 	defer func() {
 		putBufferToPool(mtype, cbuf)
 	}()
 
-	_, err := encodeNetmsg(dconn.opts.codec, dconn.opts.cp, head, m, cbuf, *dconn.copts.maxSendMessageSize)
+	_, err := encodeNetmsg(dconn.opts.codec, dconn.opts.cp, head, m, cbuf, maxMsgSize)
 	if err != nil {
 		xlog.Warning("grpcx: connDial encodeNetmsg message error:%v", err)
 		return err
@@ -463,7 +446,7 @@ func (dconn *connDial) read() (err error) {
 	}()
 
 	var (
-		reader      = bufio.NewReaderSize(dconn.conn, 65535)
+		reader      = bufio.NewReaderSize(dconn.conn, int(dconn.opts.readerWindowSize))
 		header      *PackHeader
 		msg         []byte
 		maxRecvSize = *dconn.copts.maxReceiveMessageSize
@@ -506,6 +489,7 @@ func (dconn *connDial) handlePacket(header *PackHeader, packet []byte) {
 }
 
 func (dconn *connDial) handleGoAway(head *PackHeader) {
+	xlog.Errorf("grpcx: handleGoAway sessionid:%v remoteaddr:%v", head.Sessionid, dconn.conn.RemoteAddr())
 	dconn.mux.Lock()
 	//no waiting task: close directory
 	if len(dconn.connMap) == 0 {
@@ -519,6 +503,7 @@ func (dconn *connDial) handleGoAway(head *PackHeader) {
 		return
 	}
 
+	xlog.Warningf("grpcx: handleGoAway sessionNum:%v", len(dconn.connMap))
 	dconn.goawayDone = make(chan struct{})
 	//notify on serving task
 	for _, session := range dconn.connMap {

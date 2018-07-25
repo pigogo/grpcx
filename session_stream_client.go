@@ -183,7 +183,7 @@ func (cs *clientStream) SendMsg(m interface{}) (err error) {
 }
 
 func (cs *clientStream) send(head *PackHeader, m interface{}) (err error) {
-	return cs.conn.send(head, m)
+	return cs.conn.send(head, m, *cs.c.maxSendMessageSize)
 }
 
 func (cs *clientStream) RecvMsg(m interface{}) (err error) {

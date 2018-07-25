@@ -170,8 +170,6 @@ func main() {
 			creds = credentials.NewClientTLSFromCert(nil, sn)
 		}
 		opts = append(opts, grpcx.WithCreds(creds))
-	} else {
-		opts = append(opts, grpcx.WithInsecure())
 	}
 	conn, err := grpcx.Dial(*serverAddr, opts...)
 	if err != nil {

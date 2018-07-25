@@ -115,7 +115,7 @@ func (cs *onewaySession) SendMsg(m interface{}) (err error) {
 		cs.header.Metadata = withToken(cs.header.Metadata, *cs.opts.token)
 	}
 	cs.msg = m
-	cs.err = cs.conn.send(cs.header, m)
+	cs.err = cs.conn.send(cs.header, m, *cs.opts.maxSendMessageSize)
 	if cs.err != nil {
 		xlog.Warningf("grpcx: SendMsg fail:%v", cs.err)
 		conn, put, e := cs.getConn()
@@ -136,7 +136,7 @@ func (cs *onewaySession) resend() error {
 		return cs.err
 	}
 
-	cs.err = cs.conn.send(cs.header, cs.msg)
+	cs.err = cs.conn.send(cs.header, cs.msg, *cs.opts.maxSendMessageSize)
 	if cs.err != nil {
 		xlog.Warningf("grpcx: resend fail:%v", cs.err)
 		conn, put, e := cs.getConn()

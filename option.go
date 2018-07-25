@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	defaultWindowSize                  = 65535
+	defaultWindowSize                  = 4096
 	defaultServerMaxReceiveMessageSize = 1024 * 1024 * 4
 	defaultServerMaxSendMessageSize    = 1024 * 1024 * 4
 	defaultServerMaxConcurrentReq      = 100000
@@ -47,7 +47,7 @@ type options struct {
 	codec                 codec.Codec
 	cp                    compresser.Compressor
 	dc                    compresser.Decompressor
-	initialConnWindowSize int32
+	readerWindowSize      int32
 	maxReceiveMessageSize int
 	maxSendMessageSize    int
 	maxConcurrentRequest  uint32
@@ -61,17 +61,16 @@ var defaultServerOptions = options{
 	maxSendMessageSize:    defaultServerMaxSendMessageSize,
 	maxConcurrentRequest:  defaultServerMaxConcurrentReq,
 	maxConcurrentRoutine:  defaultServerMaxConcurrentRoutine,
-	initialConnWindowSize: defaultWindowSize,
+	readerWindowSize:      defaultWindowSize,
 }
 
 // A ServerOption sets options such as credentials, codec and keepalive parameters, etc.
 type ServerOption func(*options)
 
-// WithInitialConnWindowSize returns a DialOption which sets the value for initial window size on a connection.
-// The lower bound for window size is 64K and any value smaller than that will be ignored.
-func WithInitialConnWindowSize(s int32) ServerOption {
+// ReaderWindowSize returns a ServerOption which sets the value for reader window size for most data read once.
+func ReaderWindowSize(s int32) ServerOption {
 	return func(o *options) {
-		o.initialConnWindowSize = s
+		o.readerWindowSize = s
 	}
 }
 

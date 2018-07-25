@@ -32,18 +32,18 @@ import (
 // dialOptions configure a Dial call. dialOptions are set by the DialOption
 // values passed to Dial.
 type dialOptions struct {
-	creds           credentials.TransportCredentials
-	codec           codec.Codec
-	cp              compresser.Compressor
-	dc              compresser.Decompressor
-	balancer        Balancer
-	block           bool
-	insecure        bool
-	timeout         time.Duration
-	keepalivePeriod time.Duration
-	scChan          <-chan ServiceConfig
-	callOptions     []CallOption
-	connPlugin      IConnPlugin
+	creds            credentials.TransportCredentials
+	codec            codec.Codec
+	cp               compresser.Compressor
+	dc               compresser.Decompressor
+	balancer         Balancer
+	block            bool
+	timeout          time.Duration
+	keepalivePeriod  time.Duration
+	readerWindowSize int32
+	scChan           <-chan ServiceConfig
+	callOptions      []CallOption
+	connPlugin       IConnPlugin
 }
 
 const (
@@ -112,17 +112,8 @@ func WithBlock() DialOption {
 	}
 }
 
-// WithInsecure returns a DialOption which disables transport security for this ClientConn.
-// Note that transport security is required unless WithInsecure is set.
-func WithInsecure() DialOption {
-	return func(o *dialOptions) {
-		o.insecure = true
-	}
-}
-
-// WithTimeout returns a DialOption that configures a timeout for dialing a ClientConn
-// initially. This is valid if and only if WithBlock() is present.
-// Deprecated: use DialContext and context.WithTimeout instead.
+// WithTimeout returns a DialOption that configures a timeout for net.DialTimeout's parameter
+// default value is three seconds
 func WithTimeout(d time.Duration) DialOption {
 	return func(o *dialOptions) {
 		o.timeout = d
@@ -133,6 +124,13 @@ func WithTimeout(d time.Duration) DialOption {
 func WithKeepAlive(d time.Duration) DialOption {
 	return func(o *dialOptions) {
 		o.keepalivePeriod = d
+	}
+}
+
+// WithReaderWindowSize returns a DialOption which sets the value for reader window size for most data read once.
+func WithReaderWindowSize(s int32) DialOption {
+	return func(o *dialOptions) {
+		o.readerWindowSize = s
 	}
 }
 

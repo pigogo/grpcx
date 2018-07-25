@@ -122,10 +122,9 @@ func (s *Server) Serve(addrs ...string) error {
 				}
 
 				go func(conn net.Conn) {
-					conn.(*net.TCPConn).SetReadBuffer(int(s.opts.initialConnWindowSize))
-					conn.(*net.TCPConn).SetWriteBuffer(int(s.opts.initialConnWindowSize))
 					conn.(*net.TCPConn).SetKeepAlive(s.opts.keepalivePeriod > 0)
 					conn.(*net.TCPConn).SetKeepAlivePeriod(s.opts.keepalivePeriod)
+					conn.(*net.TCPConn).SetLinger(3)
 					if s.opts.creds != nil {
 						conn, _, err = s.opts.creds.ServerHandshake(conn)
 						if err != nil {
@@ -279,7 +278,7 @@ func (s *Server) SendTo(ctx context.Context, method string, m interface{}, keys 
 }
 
 func (s *Server) send(conn Conn, head *PackHeader, m interface{}) (err error) {
-	return conn.send(head, m)
+	return conn.send(head, m, s.opts.maxSendMessageSize)
 }
 
 func (s *Server) sendError(conn Conn, sessionid int64, err error) error {

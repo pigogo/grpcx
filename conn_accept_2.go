@@ -169,10 +169,10 @@ func (aconn *connAccept2) sessionOf(id int64) Stream {
 	return aconn.connMap[id]
 }
 
-func (aconn *connAccept2) send(head *PackHeader, m interface{}) error {
+func (aconn *connAccept2) send(head *PackHeader, m interface{}, maxMsgSize int) error {
 	mtype := reflect.TypeOf(m)
 	cbuf := getBufferFromPool(mtype)
-	_, err := encodeNetmsg(aconn.opts.codec, aconn.opts.cp, head, m, cbuf, aconn.opts.maxSendMessageSize)
+	_, err := encodeNetmsg(aconn.opts.codec, aconn.opts.cp, head, m, cbuf, maxMsgSize)
 	if err != nil {
 		return err
 	}
@@ -196,7 +196,7 @@ func (aconn *connAccept2) write() (err error) {
 	}()
 
 	var msg *outPack
-	var buf = bufio.NewWriterSize(aconn.conn, 65535)
+	var buf = bufio.NewWriterSize(aconn.conn, int(aconn.opts.readerWindowSize))
 	for {
 		select {
 		case msg = <-aconn.buf.get():
@@ -269,7 +269,7 @@ func (aconn *connAccept2) notifyGoaway() {
 		Sessionid: aconn.maxStreamID,
 	}
 
-	if aconn.send(goawayHead, nil) != nil {
+	if aconn.send(goawayHead, nil, aconn.opts.maxSendMessageSize) != nil {
 		aconn.closeGraceDone()
 	}
 }
@@ -306,7 +306,7 @@ func (aconn *connAccept2) handlePingPacket(head *PackHeader, p []byte) {
 		return
 	}
 	aconn.lastPoneTime = aconn.lastAliveTime
-	if e := aconn.send(head, nil); e != nil {
+	if e := aconn.send(head, nil, aconn.opts.maxSendMessageSize); e != nil {
 		xlog.Warningf("grpcx: connAccept.handlePingPacket failed to send Pong: %v", e)
 	}
 }

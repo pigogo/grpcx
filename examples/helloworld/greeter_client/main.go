@@ -35,7 +35,7 @@ const (
 
 func main() {
 	// Set up a connection to the server.
-	conn, err := grpc.Dial(address, grpc.WithInsecure(), grpc.WithKeepAlive(time.Second))
+	conn, err := grpc.Dial(address, grpc.WithKeepAlive(time.Second))
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}

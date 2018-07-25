@@ -37,7 +37,7 @@ func (ss *serverStream) SendMsg(m interface{}) (err error) {
 		Sessionid: ss.sessionid,
 	}
 
-	return ss.conn.send(head, m)
+	return ss.conn.send(head, m, ss.opts.maxSendMessageSize)
 }
 
 func (ss *serverStream) RecvMsg(m interface{}) (err error) {

@@ -22,8 +22,20 @@
 package grpcx
 
 import (
+	"time"
+
 	"github.com/pigogo/grpcx/codec"
 	"golang.org/x/net/context"
+)
+
+var (
+	defaultDialOpts = []DialOption{
+		WithTimeout(time.Second * 3),
+		WithKeepAlive(time.Minute * 3),
+		WithCodec(codec.ProtoCodec{}),
+		WithMaxMsgSize(defaultClientMaxReceiveMessageSize),
+		WithReaderWindowSize(defaultWindowSize),
+	}
 )
 
 // Dial creates a client connection to the given target.
@@ -43,15 +55,9 @@ func DialContext(ctx context.Context, target string, opts ...DialOption) (conn *
 	}
 	cc.csEvltr = &ConnectivityStateEvaluator{CsMgr: cc.csMgr}
 	cc.ctx, cc.cancel = context.WithCancel(context.Background())
-
+	opts = append(defaultDialOpts, opts...)
 	for _, opt := range opts {
 		opt(&cc.dopts)
-	}
-
-	if cc.dopts.timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, cc.dopts.timeout)
-		defer cancel()
 	}
 
 	defer func() {
@@ -77,11 +83,6 @@ func DialContext(ctx context.Context, target string, opts ...DialOption) (conn *
 			}
 		default:
 		}
-	}
-
-	// Set defaults.
-	if cc.dopts.codec == nil {
-		cc.dopts.codec = codec.ProtoCodec{}
 	}
 
 	waitC := make(chan error, 1)

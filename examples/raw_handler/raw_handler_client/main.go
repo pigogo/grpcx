@@ -31,7 +31,7 @@ func main() {
 	grpc.RegistNotifyHandler("/notify/SayHello", SayHello)
 
 	// Set up a connection to the server.
-	conn, err := grpc.Dial(address, grpc.WithInsecure())
+	conn, err := grpc.Dial(address)
 	if err != nil {
 		log.Fatalf("did not connect: %v", err)
 	}

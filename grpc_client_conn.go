@@ -134,7 +134,7 @@ func (cc *ClientConn) lbWatcher(doneChan chan struct{}) {
 				err = cc.resetAddrConn(a, false)
 			}
 			if err != nil {
-				xlog.Warningf("Error creating connection to %v. Err: %v", a, err)
+				xlog.Warningf("grpcx: Error creating connection to %v. Err: %v", a, err)
 			}
 		}
 
@@ -162,10 +162,6 @@ func (cc *ClientConn) lbWatcher(doneChan chan struct{}) {
 }
 
 // resetAddrConn creates an Conn for addr and adds it to cc.conns.
-//
-// We should never need to replace an Conn with a new one. This function is only used
-// as newAddrConn to create new Conn.
-// TODO rename this function and clean up the code.
 func (cc *ClientConn) resetAddrConn(addr string, block bool) error {
 	var up func() func(error)
 	if cc.dopts.balancer != nil {
@@ -173,13 +169,33 @@ func (cc *ClientConn) resetAddrConn(addr string, block bool) error {
 			return cc.dopts.balancer.Up(addr)
 		}
 	}
+
 	conn, err := newDialConn(cc.ctx, addr, cc.dopts, cc.csEvltr, up)
 	if err != nil {
+		xlog.Errorf("grpcx: newDialConn fail:%v", err)
 		return err
 	}
 	cc.mu.Lock()
 	cc.conns[addr] = conn
 	cc.mu.Unlock()
+
+	if block {
+		if err = conn.dial(); err != nil {
+			conn.close()
+			cc.mu.Lock()
+			delete(cc.conns, addr)
+			cc.mu.Unlock()
+
+			xlog.Errorf("grpcx: newDialConn dial error:%v", err)
+			return err
+		}
+
+		return nil
+	}
+
+	go func() {
+		conn.dial()
+	}()
 	return nil
 }
 
