@@ -1,3 +1,6 @@
+// Copyright (C) 2018 Kun Zhong All rights reserved.
+// Use of this source code is governed by a Licensed under the Apache License, Version 2.0 (the "License");
+
 package discover
 
 import (
@@ -31,7 +34,7 @@ type etcdNode struct {
 // NewEtcdNode create a etcd node for service discovery
 // nodeValue should contain the service ip and port etc. which can descrip a service
 // sessionTimeout indicate the node's ttl
-func NewEtcdNode(basePath, sname string, nodeValue []byte, endpoints []string, sessionTimeout time.Duration) (_ RegisterAPI, err error) {
+func NewEtcdNode(basePath, sname string, nodeValue string, endpoints []string, sessionTimeout time.Duration) (_ RegisterAPI, err error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("grpcx: empty endpoints")
 	}
@@ -53,7 +56,7 @@ func NewEtcdNode(basePath, sname string, nodeValue []byte, endpoints []string, s
 		stopCh:         make(chan struct{}),
 		sessionTimeout: sessionTimeout,
 		nodePath:       nodePath,
-		nodeValue:      string(nodeValue),
+		nodeValue:      nodeValue,
 		basePath:       basePath,
 	}
 

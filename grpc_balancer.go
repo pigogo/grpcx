@@ -55,6 +55,8 @@ type BalancerGetOptions struct {
 	// BlockingWait specifies whether Get should block when there is no
 	// connected address.
 	BlockingWait bool
+	// HashKey only work in hash balancer which specifies the key for hash op
+	HashKey int64
 }
 
 // Balancer chooses network addresses for RPCs.

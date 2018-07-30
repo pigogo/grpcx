@@ -1,3 +1,6 @@
+// Copyright (C) 2018 Kun Zhong All rights reserved.
+// Use of this source code is governed by a Licensed under the Apache License, Version 2.0 (the "License");
+
 package discover
 
 import (
@@ -9,7 +12,7 @@ var maxRetryDelay = time.Second * 3
 // NotifyInfo descript the info return from storage server
 type NotifyInfo struct {
 	Key         string
-	Val         []byte
+	Val         string
 	LastVersion uint64
 }
 

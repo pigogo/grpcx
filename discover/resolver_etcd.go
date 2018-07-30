@@ -1,3 +1,6 @@
+// Copyright (C) 2018 Kun Zhong All rights reserved.
+// Use of this source code is governed by a Licensed under the Apache License, Version 2.0 (the "License");
+
 package discover
 
 import (
@@ -184,7 +187,7 @@ func (er *etcdResolver) SubService(spath string) (<-chan []*NotifyInfo, func(), 
 				for _, notify := range notifys {
 					ninfos = append(ninfos, &NotifyInfo{
 						Key:         notify.Key,
-						Val:         notify.Value,
+						Val:         string(notify.Value),
 						LastVersion: notify.LastIndex,
 					})
 				}

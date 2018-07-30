@@ -1,3 +1,6 @@
+// Copyright (C) 2018 Kun Zhong All rights reserved.
+// Use of this source code is governed by a Licensed under the Apache License, Version 2.0 (the "License");
+
 package discover
 
 import (
@@ -167,7 +170,7 @@ func (zr *zookeeperResolver) SubService(spath string) (<-chan []*NotifyInfo, fun
 				for _, notify := range notifys {
 					ninfos = append(ninfos, &NotifyInfo{
 						Key:         notify.Key,
-						Val:         notify.Value,
+						Val:         string(notify.Value),
 						LastVersion: notify.LastIndex,
 					})
 				}

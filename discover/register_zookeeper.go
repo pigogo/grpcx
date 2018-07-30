@@ -1,3 +1,6 @@
+// Copyright (C) 2018 Kun Zhong All rights reserved.
+// Use of this source code is governed by a Licensed under the Apache License, Version 2.0 (the "License");
+
 package discover
 
 import (
@@ -8,8 +11,8 @@ import (
 	"time"
 
 	"github.com/docker/libkv/store"
-	zk "github.com/samuel/go-zookeeper/zk"
 	xlog "github.com/pigogo/grpcx/grpclog"
+	zk "github.com/samuel/go-zookeeper/zk"
 )
 
 type zookeeperNode struct {
@@ -20,13 +23,13 @@ type zookeeperNode struct {
 	sessionTimeout time.Duration
 	basePath       string
 	nodePath       string
-	nodeValue      []byte
+	nodeValue      string
 }
 
 // NewZookeeperNode create a zk node for service discovery
 // nodeValue should contain the service ip and port etc. which can descrip a service
 // sessionTimeout indicate the node's ttl
-func NewZookeeperNode(basePath, sname string, nodeValue []byte, endpoints []string, sessionTimeout time.Duration) (_ RegisterAPI, err error) {
+func NewZookeeperNode(basePath, sname string, nodeValue string, endpoints []string, sessionTimeout time.Duration) (_ RegisterAPI, err error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("grpcx: empty endpoints")
 	}
@@ -93,7 +96,7 @@ func (s *zookeeperNode) eventLoop() {
 
 			if event.State == zk.StateConnected {
 				//reconnected: recreate node
-				_, err := s.client.Create(s.nodePath, s.nodeValue, zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
+				_, err := s.client.Create(s.nodePath, []byte(s.nodeValue), zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
 				if err != nil {
 					xlog.Errorf("grpcx: create node fail:%v", err)
 					continue
@@ -116,7 +119,7 @@ func (s *zookeeperNode) eventLoop() {
 			}
 
 			xlog.Errorf("grpcx: zk node not exist recreate it")
-			_, err = s.client.Create(s.nodePath, s.nodeValue, zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
+			_, err = s.client.Create(s.nodePath, []byte(s.nodeValue), zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
 			if err != nil {
 				xlog.Errorf("grpcx: create node fail:%v", err)
 				continue
