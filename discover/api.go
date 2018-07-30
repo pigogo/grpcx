@@ -14,8 +14,8 @@ type NotifyInfo struct {
 }
 
 type notifiers struct {
-	gotifyCh chan []*NotifyInfo
 	stopCh   chan struct{}
+	watchers []chan []*NotifyInfo
 }
 
 // ResolverAPI is the interface of the discover
@@ -24,10 +24,9 @@ type ResolverAPI interface {
 	Start() error
 	// Stop close the resolver
 	Stop()
-	// SubService watch the service; any change will be notify by the channel
-	// each spath can be watch only once
-	SubService(spath string) (<-chan []*NotifyInfo, error)
-	UnSubService(spath string)
+	// SubService watch the service; any change will be notify by the ch
+	// unsub used to unsuband remove the notification
+	SubService(spath string) (ch <-chan []*NotifyInfo, unsub func(), err error)
 }
 
 // RegisterAPI used to stop a service and delete the node

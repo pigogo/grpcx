@@ -112,8 +112,7 @@ func (s *etcdNode) eventLoop() {
 			if rsp, err := s.client.Get(context.Background(), s.nodePath, nil); err != nil {
 				xlog.Infof("grpcx: etcdNode node not exist, nodePath:%v", s.nodePath)
 				if _, err := s.client.Set(context.Background(), s.nodePath, s.nodeValue, &etcd.SetOptions{
-					PrevExist: etcd.PrevExist,
-					TTL:       s.sessionTimeout,
+					TTL: s.sessionTimeout,
 				}); err != nil {
 					xlog.Errorf("grpcx: etcdNode create node fail:%v nodepath:%v", err, s.nodePath)
 				}

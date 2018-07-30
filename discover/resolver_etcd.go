@@ -104,41 +104,52 @@ func (er *etcdResolver) Stop() {
 	er.driver.Close()
 
 	for _, notifier := range er.watchs {
-		close(notifier.gotifyCh)
+		for _, watcher := range notifier.watchers {
+			close(watcher)
+		}
 		close(notifier.stopCh)
 	}
 	er.watchs = make(map[string]notifiers)
 }
 
-func (er *etcdResolver) SubService(spath string) (<-chan []*NotifyInfo, error) {
+func (er *etcdResolver) SubService(spath string) (<-chan []*NotifyInfo, func(), error) {
 	er.mux.Lock()
 	defer er.mux.Unlock()
 
 	if er.stopCh != nil {
 		select {
 		case <-er.stopCh:
-			return nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
+			return nil, nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
 		default:
 		}
 	} else {
-		return nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
+		return nil, nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
 	}
 
-	if _, ok := er.watchs[spath]; ok {
-		return nil, fmt.Errorf("grpcx: service already be subscribed:%v", spath)
-	}
+	var watchers *notifiers
+	var gotifyCh = make(chan []*NotifyInfo)
+	var unsub = func() {
+		er.mux.Lock()
+		defer er.mux.Unlock()
 
-	stopCh := make(chan struct{})
-	gotifyCh := make(chan []*NotifyInfo)
-	er.watchs[spath] = notifiers{
-		stopCh:   stopCh,
-		gotifyCh: gotifyCh,
+		wlen := len(watchers.watchers)
+		for i, watcher := range watchers.watchers {
+			if watcher == gotifyCh {
+				watchers.watchers[i] = watchers.watchers[wlen-1]
+				watchers.watchers = watchers.watchers[:wlen-1]
+				//no watcher, remove it
+				if wlen-1 == 0 {
+					close(watchers.stopCh)
+					delete(er.watchs, spath)
+				}
+			}
+		}
 	}
 
 	gotify := func() {
 		retryDelay := time.Duration(0)
 		for {
-			notifyCh, err := er.driver.WatchTree(spath, stopCh)
+			notifyCh, err := er.driver.WatchTree(spath, watchers.stopCh)
 			if err != nil {
 				xlog.Errorf("grpcx: etcd WatchTree fail:%v", err)
 				select {
@@ -178,32 +189,26 @@ func (er *etcdResolver) SubService(spath string) (<-chan []*NotifyInfo, error) {
 					})
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
-				select {
-				case gotifyCh <- ninfos:
-					break
-				case <-er.stopCh:
+				er.mux.RLock()
+				for _, watcher := range watchers.watchers {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					select {
+					case watcher <- ninfos:
+						break
+					case <-er.stopCh:
+						er.mux.RUnlock()
+						cancel()
+						return
+					case <-ctx.Done():
+						xlog.Warningf("grpcx: etcd update discard because of notify chan ful and put timeout:%v", ninfos)
+					}
 					cancel()
-					return
-				case <-ctx.Done():
-					xlog.Warningf("grpcx: etcd update discard because of notify chan ful and put timeout:%v", ninfos)
 				}
-				cancel()
+				er.mux.RUnlock()
 			}
 		}
 	}
 
 	go gotify()
-	return gotifyCh, nil
-}
-
-func (er *etcdResolver) UnSubService(spath string) {
-	er.mux.Lock()
-	defer er.mux.Unlock()
-
-	if notifier, ok := er.watchs[spath]; ok {
-		delete(er.watchs, spath)
-		close(notifier.stopCh)
-		close(notifier.gotifyCh)
-	}
+	return gotifyCh, unsub, nil
 }

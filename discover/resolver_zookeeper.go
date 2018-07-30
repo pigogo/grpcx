@@ -35,7 +35,7 @@ func NewZookeeperResolver(endpoints []string, timeout time.Duration) (ResolverAP
 			ConnectionTimeout: timeout,
 		},
 		stopCh: make(chan struct{}),
-		watchs: make(map[string]notifiers),
+		watchs: make(map[string]*notifiers),
 	}, nil
 }
 
@@ -43,7 +43,7 @@ type zookeeperResolver struct {
 	driver    store.Store
 	endpoints []string
 	config    *store.Config
-	watchs    map[string]notifiers
+	watchs    map[string]*notifiers
 	mux       sync.RWMutex
 	stopCh    chan struct{}
 }
@@ -77,41 +77,62 @@ func (zr *zookeeperResolver) Stop() {
 	zr.driver.Close()
 
 	for _, notifier := range zr.watchs {
-		close(notifier.gotifyCh)
+		for _, watcher := range notifier.watchers {
+			close(watcher)
+		}
 		close(notifier.stopCh)
 	}
-	zr.watchs = make(map[string]notifiers)
+	zr.watchs = make(map[string]*notifiers)
 }
 
-func (zr *zookeeperResolver) SubService(spath string) (<-chan []*NotifyInfo, error) {
+func (zr *zookeeperResolver) SubService(spath string) (<-chan []*NotifyInfo, func(), error) {
 	zr.mux.Lock()
 	defer zr.mux.Unlock()
 
 	if zr.stopCh != nil {
 		select {
 		case <-zr.stopCh:
-			return nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
+			return nil, nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
 		default:
 		}
 	} else {
-		return nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
+		return nil, nil, fmt.Errorf("grpcx: etcdResolver already closed or unstart yet")
 	}
 
-	if _, ok := zr.watchs[spath]; ok {
-		return nil, fmt.Errorf("grpcx: service already be subscribed:%v", spath)
+	var watchers *notifiers
+	var gotifyCh = make(chan []*NotifyInfo)
+	var unsub = func() {
+		zr.mux.Lock()
+		defer zr.mux.Unlock()
+
+		wlen := len(watchers.watchers)
+		for i, watcher := range watchers.watchers {
+			if watcher == gotifyCh {
+				watchers.watchers[i] = watchers.watchers[wlen-1]
+				watchers.watchers = watchers.watchers[:wlen-1]
+				//no watcher, remove it
+				if wlen-1 == 0 {
+					close(watchers.stopCh)
+					delete(zr.watchs, spath)
+				}
+			}
+		}
 	}
 
-	stopCh := make(chan struct{})
-	gotifyCh := make(chan []*NotifyInfo)
-	zr.watchs[spath] = notifiers{
-		stopCh:   stopCh,
-		gotifyCh: gotifyCh,
+	if watchers := zr.watchs[spath]; watchers != nil {
+		watchers.watchers = append(watchers.watchers, gotifyCh)
+		return gotifyCh, unsub, nil
 	}
 
+	watchers = &notifiers{
+		stopCh: make(chan struct{}),
+	}
+	watchers.watchers = append(watchers.watchers, gotifyCh)
+	zr.watchs[spath] = watchers
 	gotify := func() {
 		retryDelay := time.Duration(0)
 		for {
-			notifyCh, err := zr.driver.WatchTree(spath, stopCh)
+			notifyCh, err := zr.driver.WatchTree(spath, watchers.stopCh)
 			if err != nil {
 				xlog.Errorf("grpcx: zookeeper WatchTree fail:%v", err)
 				select {
@@ -151,32 +172,26 @@ func (zr *zookeeperResolver) SubService(spath string) (<-chan []*NotifyInfo, err
 					})
 				}
 
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
-				select {
-				case gotifyCh <- ninfos:
-					break
-				case <-zr.stopCh:
+				zr.mux.RLock()
+				for _, watcher := range watchers.watchers {
+					ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+					select {
+					case watcher <- ninfos:
+						break
+					case <-zr.stopCh:
+						zr.mux.RUnlock()
+						cancel()
+						return
+					case <-ctx.Done():
+						xlog.Warningf("grpcx: zookeeper update discard because of notify chan ful and put timeout:%v", ninfos)
+					}
 					cancel()
-					return
-				case <-ctx.Done():
-					xlog.Warningf("grpcx: zookeeper update discard because of notify chan ful and put timeout:%v", ninfos)
 				}
-				cancel()
+				zr.mux.RUnlock()
 			}
 		}
 	}
 
 	go gotify()
-	return gotifyCh, nil
-}
-
-func (zr *zookeeperResolver) UnSubService(spath string) {
-	zr.mux.Lock()
-	defer zr.mux.Unlock()
-
-	if notifier, ok := zr.watchs[spath]; ok {
-		delete(zr.watchs, spath)
-		close(notifier.stopCh)
-		close(notifier.gotifyCh)
-	}
+	return gotifyCh, unsub, nil
 }
