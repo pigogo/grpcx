@@ -33,7 +33,7 @@ import (
 	"github.com/pigogo/grpcx/credentials"
 	pb "github.com/pigogo/grpcx/examples/route_guide/routeguide"
 	"golang.org/x/net/context"
-	"google.golang.org/grpc/grpclog"
+	"github.com/pigogo/grpcx/grpclog"
 	"google.golang.org/grpc/testdata"
 )
 

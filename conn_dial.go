@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/net/context"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 const infinitTime = time.Hour * 24 * 30 * 12

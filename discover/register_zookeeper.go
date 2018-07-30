@@ -9,7 +9,7 @@ import (
 
 	"github.com/docker/libkv/store"
 	zk "github.com/samuel/go-zookeeper/zk"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 type zookeeperNode struct {

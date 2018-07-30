@@ -36,7 +36,7 @@ import (
 	"golang.org/x/net/context"
 
 	"github.com/pigogo/grpcx/credentials"
-	"google.golang.org/grpc/grpclog"
+	"github.com/pigogo/grpcx/grpclog"
 	"google.golang.org/grpc/testdata"
 
 	"github.com/golang/protobuf/proto"

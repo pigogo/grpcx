@@ -10,7 +10,7 @@ import (
 
 	"github.com/docker/libkv"
 	"github.com/docker/libkv/store"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 // NewEtcdResolver used to create a etcd service discover

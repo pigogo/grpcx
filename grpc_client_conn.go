@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"golang.org/x/net/context"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 type connAddrKey struct{}

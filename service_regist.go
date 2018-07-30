@@ -11,7 +11,7 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/net/context"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 type unaryMethodHandler func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor UnaryServerInterceptor) (interface{}, error)

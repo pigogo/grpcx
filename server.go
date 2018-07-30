@@ -15,7 +15,7 @@ import (
 	"github.com/juju/ratelimit"
 	"github.com/pigogo/grpcx/codec"
 	"golang.org/x/net/context"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 var (

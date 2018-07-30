@@ -13,7 +13,7 @@ import (
 	"github.com/pigogo/grpcx/codec"
 
 	"github.com/pigogo/grpcx/compresser"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 const headMagic byte = 0x66

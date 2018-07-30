@@ -10,7 +10,7 @@ import (
 
 	"github.com/pigogo/grpcx/codec"
 	"golang.org/x/net/context"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 // NewClientStream creates a new Stream for the client side. This is called

@@ -5,7 +5,7 @@ package grpcx
 
 import (
 	"golang.org/x/net/context"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 type oneState byte

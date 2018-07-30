@@ -10,7 +10,7 @@ import (
 
 	etcd "github.com/coreos/etcd/client"
 	"github.com/docker/libkv/store"
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 const (

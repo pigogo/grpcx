@@ -6,7 +6,7 @@ package grpcx
 import (
 	"sync"
 
-	xlog "google.golang.org/grpc/grpclog"
+	xlog "github.com/pigogo/grpcx/grpclog"
 )
 
 func newDispatcher(maxConcurrentTask int) *taskDispatcher {
