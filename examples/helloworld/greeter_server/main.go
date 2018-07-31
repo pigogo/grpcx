@@ -20,6 +20,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"time"
 
 	grpc "github.com/pigogo/grpcx"
@@ -42,7 +43,12 @@ func (s *server) SayHello(ctx context.Context, in *pb.HelloRequest) (*pb.HelloRe
 func main() {
 	s := grpc.NewServer(grpc.KeepalivePeriod(time.Second * 15))
 	pb.RegisterGreeterServer(s, &server{})
-	if err := s.Serve(port); err != nil {
+
+	ln, err := net.Listen("tcp4", port)
+	if err != nil {
+		panic(err)
+	}
+	if err = s.Serve(ln); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
 }

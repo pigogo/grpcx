@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 
@@ -32,7 +33,11 @@ func main() {
 		panic(err)
 	}
 
-	if err := srv.Serve(port); err != nil {
+	ln, err := net.Listen("tcp4", port)
+	if err != nil {
+		panic(err)
+	}
+	if err = srv.Serve(ln); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
 }

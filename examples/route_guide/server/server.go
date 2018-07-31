@@ -28,7 +28,9 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"math"
+	"net"
 	"os"
 	"time"
 
@@ -228,6 +230,12 @@ func main() {
 	pb.RegisterRouteGuideServer(grpcServer, newServer())
 
 	serveAddr := fmt.Sprintf(":%d", *port)
-	grpcServer.Serve(serveAddr)
+	ln, err := net.Listen("tcp4", serveAddr)
+	if err != nil {
+		panic(err)
+	}
+	if err = grpcServer.Serve(ln); err != nil {
+		log.Fatalf("failed to serve: %v", err)
+	}
 	os.Setenv("GRPC_GO_LOG_SEVERITY_LEVEL", oriGrpclogEnv)
 }
