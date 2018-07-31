@@ -6,6 +6,7 @@ package balancer
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -169,8 +170,7 @@ func (rr *roundRoubin) watch() {
 		var newAddrs []string
 		for _, notify := range notifys {
 			xlog.Infof("grpcx: roundRoubin get notification from resolver at key:%v version:%v val:%v", notify.Key, notify.LastVersion, notify.Val)
-			newAddrs = append(newAddrs, notify.Val)
-
+			newAddrs = append(newAddrs, notify.Key)
 		}
 
 		//renew the addr list
@@ -179,7 +179,7 @@ func (rr *roundRoubin) watch() {
 		for _, addr := range newAddrs {
 			bexist := false
 			for _, sinfo := range rr.sinfo {
-				if sinfo.addr == addr {
+				if strings.Compare(sinfo.addr, addr) == 0 {
 					bexist = true
 					sinfos = append(sinfos, sinfo)
 					break

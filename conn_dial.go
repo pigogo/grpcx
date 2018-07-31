@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
 	xlog "github.com/pigogo/grpcx/grpclog"
+	"golang.org/x/net/context"
 )
 
 const infinitTime = time.Hour * 24 * 30 * 12
@@ -142,13 +142,27 @@ func (dconn *connDial) redial() (err error) {
 		dconn.opts.connPlugin.OnPreConnect(dconn.netaddr)
 	}
 
-	dconn.conn, err = net.DialTimeout("tcp4", dconn.netaddr, dconn.opts.timeout)
+	var ctx = dconn.ctx
+	if dconn.opts.dialTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, dconn.opts.dialTimeout)
+		defer cancel()
+	}
+
+	if dconn.opts.dialer != nil {
+		dconn.conn, err = dconn.opts.dialer(ctx, dconn.netaddr)
+	} else {
+		network, addr := parseDialTarget(dconn.netaddr)
+		dconn.conn, err = dialContext(ctx, network, addr)
+	}
+
 	if err != nil {
 		xlog.Errorf("grpcx: dial:%v error:%v", dconn.netaddr, err)
 		return
 	}
 
 	if dconn.opts.creds != nil {
+		dconn.conn.SetDeadline(time.Now().Add(time.Second * 15))
 		dconn.conn, _, err = dconn.opts.creds.ClientHandshake(dconn.ctx, dconn.netaddr, dconn.conn)
 		if err != nil {
 			xlog.Errorf("grpcx: tls client handshake with:%v error:%v", dconn.netaddr, err)
@@ -429,6 +443,9 @@ func (dconn *connDial) write(out []byte) (err error) {
 		}
 	}()
 
+	if dconn.opts.writeTimeout > 0 {
+		dconn.conn.SetWriteDeadline(time.Now().Add(dconn.opts.writeTimeout))
+	}
 	_, err = dconn.conn.Write(out)
 	if err != nil {
 		dconn.setState(TransientFailure)
@@ -453,6 +470,9 @@ func (dconn *connDial) read() (err error) {
 	)
 
 	for {
+		if dconn.opts.readTimeout > 0 {
+			dconn.conn.SetReadDeadline(time.Now().Add(dconn.opts.readTimeout))
+		}
 		header, msg, err = parseAndRecvMsg(reader, dconn.opts.dc, maxRecvSize)
 		if err != nil {
 			return err

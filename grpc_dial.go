@@ -30,7 +30,7 @@ import (
 
 var (
 	defaultDialOpts = []DialOption{
-		WithTimeout(time.Second * 3),
+		WithDialTimeout(time.Second * 3),
 		WithKeepAlive(time.Minute * 3),
 		WithCodec(codec.ProtoCodec{}),
 		WithMaxMsgSize(defaultClientMaxReceiveMessageSize),

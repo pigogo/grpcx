@@ -21,15 +21,18 @@ type zookeeperNode struct {
 	zkEvent        <-chan zk.Event
 	stopCh         chan struct{}
 	sessionTimeout time.Duration
-	basePath       string
 	nodePath       string
-	nodeValue      string
+	targetValue    string
 }
 
 // NewZookeeperNode create a zk node for service discovery
-// nodeValue should contain the service ip and port etc. which can descrip a service
+// basePath is the parent path of the service; all the service should group by the basePath
+// sname os the service name
+// target will be the key of the node which should layout as "ip:port" or "schema://ip:port"; the node path is "basePath/sname/target"
+// targetValue should contain the meta data like hid, groupid etd.
+// endpoints is the etcd server addr
 // sessionTimeout indicate the node's ttl
-func NewZookeeperNode(basePath, sname string, nodeValue string, endpoints []string, sessionTimeout time.Duration) (_ RegisterAPI, err error) {
+func NewZookeeperNode(basePath, sname, targetValue, target string, endpoints []string, sessionTimeout time.Duration) (_ RegisterAPI, err error) {
 	if len(endpoints) == 0 {
 		return nil, fmt.Errorf("grpcx: empty endpoints")
 	}
@@ -40,20 +43,11 @@ func NewZookeeperNode(basePath, sname string, nodeValue string, endpoints []stri
 		}
 	}
 
-	basePath = store.Normalize(basePath)
-	sname = store.Normalize(sname)
-	if strings.Contains(sname, "/") {
-		xlog.Fatalf("grpcx: invalid service name:%v", sname)
-	}
-
-	nodePath := path.Join(basePath, sname)
 	s := &zookeeperNode{
 		endpoints:      endpoints,
 		stopCh:         make(chan struct{}),
 		sessionTimeout: sessionTimeout,
-		basePath:       basePath,
-		nodePath:       nodePath,
-		nodeValue:      nodeValue,
+		targetValue:    targetValue,
 	}
 
 	s.client, s.zkEvent, err = zk.Connect(endpoints, sessionTimeout)
@@ -62,11 +56,25 @@ func NewZookeeperNode(basePath, sname string, nodeValue string, endpoints []stri
 		return
 	}
 
+	basePath = store.Normalize(basePath)
+	sname = store.Normalize(sname)
+	target = store.Normalize(target)
+	if strings.Contains(sname, "/") {
+		xlog.Fatalf("grpcx: invalid service name:%v", sname)
+	}
 	// create base path fail
-	if _, err := s.client.Create(s.basePath, nil, 0, []zk.ACL{zk.ACL{Perms: zk.PermAll}}); err != nil && err != zk.ErrNodeExists {
+	if _, err := s.client.Create(basePath, nil, 0, []zk.ACL{zk.ACL{Perms: zk.PermAll}}); err != nil && err != zk.ErrNodeExists {
 		xlog.Fatalf("grpcx: create node base path fail:%v", err)
 	}
 
+	spath := path.Join(basePath, sname)
+	// create service path fail
+	if _, err := s.client.Create(spath, nil, 0, []zk.ACL{zk.ACL{Perms: zk.PermAll}}); err != nil && err != zk.ErrNodeExists {
+		xlog.Fatalf("grpcx: create node service path fail:%v", err)
+	}
+
+	nodePath := path.Join(spath, target)
+	s.nodePath = nodePath
 	go s.eventLoop()
 	return s, nil
 }
@@ -96,7 +104,7 @@ func (s *zookeeperNode) eventLoop() {
 
 			if event.State == zk.StateConnected {
 				//reconnected: recreate node
-				_, err := s.client.Create(s.nodePath, []byte(s.nodeValue), zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
+				_, err := s.client.Create(s.nodePath, []byte(s.targetValue), zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
 				if err != nil {
 					xlog.Errorf("grpcx: create node fail:%v", err)
 					continue
@@ -119,7 +127,7 @@ func (s *zookeeperNode) eventLoop() {
 			}
 
 			xlog.Errorf("grpcx: zk node not exist recreate it")
-			_, err = s.client.Create(s.nodePath, []byte(s.nodeValue), zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
+			_, err = s.client.Create(s.nodePath, []byte(s.targetValue), zk.FlagEphemeral, []zk.ACL{zk.ACL{Perms: zk.PermAll}})
 			if err != nil {
 				xlog.Errorf("grpcx: create node fail:%v", err)
 				continue

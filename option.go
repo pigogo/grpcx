@@ -48,6 +48,8 @@ type options struct {
 	cp                    compresser.Compressor
 	dc                    compresser.Decompressor
 	readerWindowSize      int32
+	readTimeout           time.Duration
+	writeTimeout          time.Duration
 	maxReceiveMessageSize int
 	maxSendMessageSize    int
 	maxConcurrentRequest  uint32
@@ -71,6 +73,20 @@ type ServerOption func(*options)
 func ReaderWindowSize(s int32) ServerOption {
 	return func(o *options) {
 		o.readerWindowSize = s
+	}
+}
+
+// ReadTimeout return a ServerOption which sets the conn's read timeout
+func ReadTimeout(t time.Duration) ServerOption {
+	return func(o *options) {
+		o.readTimeout = t
+	}
+}
+
+// WriteTimeout return a ServerOption which sets the conn's write timeout
+func WriteTimeout(t time.Duration) ServerOption {
+	return func(o *options) {
+		o.writeTimeout = t
 	}
 }
 

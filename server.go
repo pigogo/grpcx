@@ -14,8 +14,8 @@ import (
 
 	"github.com/juju/ratelimit"
 	"github.com/pigogo/grpcx/codec"
-	"golang.org/x/net/context"
 	xlog "github.com/pigogo/grpcx/grpclog"
+	"golang.org/x/net/context"
 )
 
 var (
@@ -94,71 +94,76 @@ func (s *Server) signalShutdownCond() {
 	s.lncd.L.Unlock()
 }
 
-// Serve begin the service and will block up until the service finish
-func (s *Server) Serve(addrs ...string) error {
+// Serve accepts incoming connections on the listener lis, creating a new
+// ServerTransport and service goroutine for each. The service goroutines
+// read gRPC requests and then call the registered handlers to reply to them.
+// Serve returns when lis.Accept fails with fatal errors.  lis will be closed when
+// this method returns.
+// Serve will return a non-nil error unless Stop or GracefulStop is called.
+func (s *Server) Serve(ln net.Listener) error {
 	s.serve = true
-	wait := sync.WaitGroup{}
-	lns := []net.Listener{}
 	s.lncd = sync.NewCond(&sync.Mutex{})
-
-	for _, addr := range addrs {
-		wait.Add(1)
-		ln, err := net.Listen("tcp4", addr)
-		if err != nil {
-			return err
-		}
-
-		lns = append(lns, ln)
-		go func() {
-			defer wait.Done()
-			for {
-				conn, err := ln.Accept()
-				if err != nil {
-					if e, ok := err.(net.Error); ok && e.Temporary() {
-						continue
-					}
-					s.signalShutdownCond()
-					return
-				}
-
-				go func(conn net.Conn) {
-					conn.(*net.TCPConn).SetKeepAlive(s.opts.keepalivePeriod > 0)
-					conn.(*net.TCPConn).SetKeepAlivePeriod(s.opts.keepalivePeriod)
-					conn.(*net.TCPConn).SetLinger(3)
-					if s.opts.creds != nil {
-						conn, _, err = s.opts.creds.ServerHandshake(conn)
-						if err != nil {
-							//todo: log handshake error
-							xlog.Warningf("grpcx: on accept conn but handshake fail:%v", err)
-						}
-						conn.Close()
-						return
-					}
-
-					s.mu.Lock()
-					s.connIDBase++
-					newConn := newAcceptConn(s.connIDBase, s.opts, conn, s.handleNetPacket, s.removeConn)
-					if s.opts.connPlugin != nil {
-						s.opts.connPlugin.OnPostConnect(newConn)
-					}
-
-					s.conns[s.connIDBase] = newConn
-					s.mu.Unlock()
-				}(conn)
-			}
-		}()
-	}
-
 	go func() {
 		s.waitShutdownCond()
-		for _, ln := range lns {
-			ln.Close()
-		}
+		ln.Close()
 	}()
 
-	wait.Wait()
-	<-s.ctx.Done()
-	return nil
+	var tempDelay time.Duration
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ne, ok := err.(interface {
+				Temporary() bool
+			}); ok && ne.Temporary() {
+				if tempDelay == 0 {
+					tempDelay = time.Millisecond * 10
+				} else {
+					tempDelay *= 2
+					if tempDelay > time.Second {
+						tempDelay = time.Second
+					}
+				}
+
+				select {
+				case <-s.ctx.Done():
+					return fmt.Errorf("grpcx: Serve stop by context done")
+				case <-time.After(tempDelay):
+				}
+				continue
+			}
+			return err
+		}
+		tempDelay = 0
+
+		go func(conn net.Conn) {
+			if tcpConn, ok := conn.(*net.TCPConn); ok {
+				tcpConn.SetKeepAlive(s.opts.keepalivePeriod > 0)
+				tcpConn.SetKeepAlivePeriod(s.opts.keepalivePeriod)
+				tcpConn.SetLinger(3)
+			}
+
+			if s.opts.creds != nil {
+				conn.SetDeadline(time.Now().Add(time.Second * 15))
+				conn, _, err = s.opts.creds.ServerHandshake(conn)
+				if err != nil {
+					//todo: log handshake error
+					xlog.Warningf("grpcx: on accept conn but handshake fail:%v", err)
+				}
+				conn.Close()
+				return
+			}
+
+			s.mu.Lock()
+			s.connIDBase++
+			newConn := newAcceptConn(s.connIDBase, s.opts, conn, s.handleNetPacket, s.removeConn)
+			if s.opts.connPlugin != nil {
+				s.opts.connPlugin.OnPostConnect(newConn)
+			}
+
+			s.conns[s.connIDBase] = newConn
+			s.mu.Unlock()
+		}(conn)
+	}
 }
 
 // Stop stops the gRPC server. It immediately closes all open

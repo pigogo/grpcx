@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/context"
 	xlog "github.com/pigogo/grpcx/grpclog"
+	"golang.org/x/net/context"
 )
 
 var (
@@ -194,6 +194,9 @@ func (aconn *connAccept) write(out []byte) (err error) {
 		}
 	}()
 
+	if aconn.opts.writeTimeout > 0 {
+		aconn.conn.SetWriteDeadline(time.Now().Add(aconn.opts.writeTimeout))
+	}
 	_, err = aconn.conn.Write(out)
 	return err
 }
@@ -213,6 +216,10 @@ func (aconn *connAccept) read() (err error) {
 	)
 
 	for {
+		if aconn.opts.readTimeout > 0 {
+			aconn.conn.SetReadDeadline(time.Now().Add(aconn.opts.readTimeout))
+		}
+
 		header, msg, err = parseAndRecvMsg(reader, aconn.opts.dc, aconn.opts.maxReceiveMessageSize)
 		if err != nil {
 			return err

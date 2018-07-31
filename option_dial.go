@@ -22,23 +22,29 @@
 package grpcx
 
 import (
+	"net"
 	"time"
 
 	"github.com/pigogo/grpcx/codec"
 	"github.com/pigogo/grpcx/compresser"
 	"github.com/pigogo/grpcx/credentials"
+	"golang.org/x/net/context"
 )
 
 // dialOptions configure a Dial call. dialOptions are set by the DialOption
 // values passed to Dial.
 type dialOptions struct {
-	creds            credentials.TransportCredentials
-	codec            codec.Codec
-	cp               compresser.Compressor
-	dc               compresser.Decompressor
-	balancer         Balancer
+	creds    credentials.TransportCredentials
+	codec    codec.Codec
+	cp       compresser.Compressor
+	dc       compresser.Decompressor
+	balancer Balancer
+	// dialer specifies how to dial a network address.
+	dialer           func(context.Context, string) (net.Conn, error)
 	block            bool
-	timeout          time.Duration
+	dialTimeout      time.Duration
+	readTimeout      time.Duration
+	writeTimeout     time.Duration
 	keepalivePeriod  time.Duration
 	readerWindowSize int32
 	scChan           <-chan ServiceConfig
@@ -112,11 +118,25 @@ func WithBlock() DialOption {
 	}
 }
 
-// WithTimeout returns a DialOption that configures a timeout for net.DialTimeout's parameter
+// WithDialTimeout returns a DialOption that configures a timeout for net.DialTimeout's parameter
 // default value is three seconds
-func WithTimeout(d time.Duration) DialOption {
+func WithDialTimeout(d time.Duration) DialOption {
 	return func(o *dialOptions) {
-		o.timeout = d
+		o.dialTimeout = d
+	}
+}
+
+// WithReadTimeout return a DialOption which sets the conn's read timeout
+func WithReadTimeout(t time.Duration) DialOption {
+	return func(o *dialOptions) {
+		o.readTimeout = t
+	}
+}
+
+// WithWriteTimeout return a DialOption which sets the conn's write timeout
+func WithWriteTimeout(t time.Duration) DialOption {
+	return func(o *dialOptions) {
+		o.writeTimeout = t
 	}
 }
 
@@ -145,5 +165,20 @@ func WithCreds(c credentials.TransportCredentials) DialOption {
 func WithPlugin(plugin IConnPlugin) DialOption {
 	return func(o *dialOptions) {
 		o.connPlugin = plugin
+	}
+}
+
+// WithDialer returns a DialOption that specifies a function to use for dialing
+// network addresses. If FailOnNonTempDialError() is set to true, and an error
+// is returned by f, gRPC checks the error's Temporary() method to decide if it
+// should try to reconnect to the network address.
+func WithDialer(f func(string, time.Duration) (net.Conn, error)) DialOption {
+	return func(o *dialOptions) {
+		o.dialer = func(ctx context.Context, addr string) (net.Conn, error) {
+			if deadline, ok := ctx.Deadline(); ok {
+				return f(addr, deadline.Sub(time.Now()))
+			}
+			return f(addr, 0)
+		}
 	}
 }
