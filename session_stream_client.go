@@ -9,9 +9,36 @@ import (
 	"sync"
 
 	"github.com/pigogo/grpcx/codec"
-	"golang.org/x/net/context"
 	xlog "github.com/pigogo/grpcx/grpclog"
+	"golang.org/x/net/context"
 )
+
+// NewStream creates a new Stream for the client side. This is typically
+// called by generated code. ctx is used for the lifetime of the stream.
+//
+// To ensure resources are not leaked due to the stream returned, one of the following
+// actions must be performed:
+//
+//      1. Call Close on the ClientConn.
+//      2. Cancel the context provided.
+//      3. Call RecvMsg until a non-nil error is returned. A protobuf-generated
+//         client-streaming RPC, for instance, might use the helper function
+//         CloseAndRecv (note that CloseSend does not Recv, therefore is not
+//         guaranteed to release all resources).
+//      4. Receive a non-nil, non-io.EOF error from Header or SendMsg.
+//
+// If none of the above happen, a goroutine and a context will be leaked, and grpc
+// will not call the optionally-configured stats handler with a stats.End message.
+func (cc *ClientConn) NewStream(ctx context.Context, desc *StreamDesc, method string, opts ...CallOption) (ClientStream, error) {
+	// allow interceptor to see all applicable call options, which means those
+	// configured as defaults from dial option as well as per-call options
+	opts = combine(cc.dopts.callOptions, opts)
+
+	/*if cc.dopts.streamInt != nil {
+		return cc.dopts.streamInt(ctx, desc, cc, method, newClientStream, opts...)
+	}*/
+	return newClientStream(ctx, desc, cc, method, opts...)
+}
 
 // NewClientStream creates a new Stream for the client side. This is called
 func NewClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, method string, opts ...CallOption) (_ ClientStream, err error) {
