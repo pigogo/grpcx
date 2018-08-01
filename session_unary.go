@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/pigogo/grpcx/codec"
-	"golang.org/x/net/context"
 	xlog "github.com/pigogo/grpcx/grpclog"
+	"golang.org/x/net/context"
 )
 
 type unaryState byte
@@ -19,7 +19,6 @@ const (
 	unaryRequst    unaryState = 0
 	unaryResponse  unaryState = 1
 	unaryResendReq unaryState = 2
-	unaryFinish    unaryState = 3
 )
 
 const (
@@ -73,47 +72,33 @@ func newUnarySession(ctx context.Context, cc *ClientConn, method string, opts ..
 		}
 	}
 
-	var cs *unarySession
-	for {
-		conn, put, err = getConn()
-		if err != nil {
-			xlog.Warningf("grpcx: newUnarySession getConn fail:%v", err)
-			return nil, err
-		}
-
-		if cs == nil {
-			cs = &unarySession{
-				opts:      c,
-				codec:     cc.dopts.codec,
-				cancel:    cancel,
-				ctx:       ctx,
-				getConn:   getConn,
-				put:       put,
-				conn:      conn,
-				method:    method,
-				sessionid: cc.genStreamID(),
-				pnotify:   make(chan struct{}),
-				goawayCh:  make(chan struct{}),
-				state:     unaryRequst,
-			}
-		} else {
-			cs.put, cs.conn = put, conn
-		}
-
-		cs.connCancel, err = conn.withSession(cs.sessionid, cs)
-		if err == nil {
-			break
-		} else {
-			xlog.Warningf("grpcx: conn withSession error:%v", err)
-		}
+	conn, put, err = getConn()
+	if err != nil {
+		xlog.Warningf("grpcx: newUnarySession getConn fail:%v", err)
+		return nil, err
 	}
 
-	go func() {
-		select {
-		case <-cs.ctx.Done():
-		}
-		cs.finish()
-	}()
+	cs := &unarySession{
+		opts:      c,
+		codec:     cc.dopts.codec,
+		cancel:    cancel,
+		ctx:       ctx,
+		getConn:   getConn,
+		put:       put,
+		conn:      conn,
+		method:    method,
+		sessionid: cc.genStreamID(),
+		pnotify:   make(chan struct{}),
+		goawayCh:  make(chan struct{}),
+		state:     unaryRequst,
+	}
+	cs.connCancel, err = conn.withSession(cs.sessionid, cs)
+	if err != nil {
+		err = fmt.Errorf("grpcx: conn withSession error:%v", err)
+		xlog.Error(err)
+		return nil, err
+	}
+
 	return cs, nil
 }
 
@@ -131,10 +116,10 @@ type unarySession struct {
 	method     string
 	sessionid  int64
 
-	err          error
-	mu           sync.Mutex
-	put          func()
-	finished     bool
+	err error
+	mu  sync.Mutex
+	put func()
+
 	pnotify      chan struct{}
 	notifyNotify chan struct{}
 	goawayCh     chan struct{}
@@ -161,18 +146,13 @@ func (cs *unarySession) Run(args, reply interface{}) (err error) {
 			if err != nil {
 				return
 			}
-		case unaryResponse:
-			err = cs.RecvMsg(reply)
-			if err != nil {
-				return err
-			}
 		case unaryResendReq:
 			err = cs.resend()
 			if err != nil {
 				return err
 			}
-		case unaryFinish:
-			return
+		case unaryResponse:
+			return cs.RecvMsg(reply)
 		}
 	}
 }
@@ -224,10 +204,9 @@ func (cs *unarySession) switchConn() error {
 		cs.err = fmt.Errorf("grpcx: connection error")
 		return cs.err
 	}
-
+	cs.connCancel()
 	cs.conn, cs.put = conn, put
 	cs.connCancel, _ = conn.withSession(cs.sessionid, cs)
-	cs.state = unaryResendReq
 	return nil
 }
 
@@ -240,33 +219,29 @@ func (cs *unarySession) RecvMsg(m interface{}) (err error) {
 
 	select {
 	case <-cs.pnotify:
+		// receive msg from server
 	case <-cs.goawayCh:
 		//ongoaway::wait 100ms up until retry
 		ctx, _ := context.WithTimeout(context.Background(), time.Millisecond*100)
 		//ctx := context.Background()
 		select {
 		case <-cs.pnotify:
-			// cs.ctx timeout or receive msg from server
+			// receive msg from server
 			break
 		case <-cs.conn.Error():
-			// maybe conn be closed by server
-			if err = cs.switchConn(); err != nil {
-				return
-			}
+			cs.err = fmt.Errorf("grpcx: service goaway")
+			return cs.err
 		case <-ctx.Done():
-			// wait timeout
-			if err = cs.switchConn(); err != nil {
-				return
-			}
+			cs.err = fmt.Errorf("grpcx: service goaway")
+			return cs.err
 		}
 	case <-cs.conn.Error():
-		// transport error
-		if err = cs.switchConn(); err != nil {
-			return
-		}
+		cs.err = fmt.Errorf("grpcx: service goaway")
+		return cs.err
+	case <-cs.ctx.Done():
+		return cs.ctx.Err()
 	}
 
-	cs.state = unaryFinish
 	if cs.packet == nil {
 		if cs.err != nil {
 			return cs.err
@@ -294,26 +269,8 @@ func (cs *unarySession) onGoaway() {
 }
 
 func (cs *unarySession) onMessage(conn Conn, head *PackHeader, body []byte) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("grpcx: unarySession::onMessage recover:%v", r)
-		}
-
-		if err != nil {
-			xlog.Warning(err)
-			cs.err = err
-			cs.finish()
-		}
-	}()
-
 	if cs.conn != conn {
-		cs.packet = &netPack{
-			head: &PackHeader{
-				Ptype: PackType_ERROR,
-			},
-			body: []byte("grpcx: inner error:conn channel mix up"),
-		}
-		return fmt.Errorf("grpcx: inner error:conn channel mix up")
+		return
 	}
 
 	if head.Ptype == PackType_GoAway {
@@ -325,7 +282,7 @@ func (cs *unarySession) onMessage(conn Conn, head *PackHeader, body []byte) (err
 		head: head,
 		body: body,
 	}
-	cs.closePNotify()
+	close(cs.pnotify)
 	return nil
 }
 
@@ -333,16 +290,10 @@ func (cs *unarySession) finish() {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	if cs.finished {
-		return
+	if cs.cancel != nil {
+		cs.cancel()
+		cs.cancel = nil
 	}
-
-	cs.finished = true
-	defer func() {
-		if cs.cancel != nil {
-			cs.cancel()
-		}
-	}()
 
 	if cs.connCancel != nil {
 		cs.connCancel()
@@ -355,25 +306,9 @@ func (cs *unarySession) finish() {
 	}
 
 	if cs.notifyNotify != nil {
-		cs.closeNotify()
+		close(cs.notifyNotify)
+		cs.notifyNotify = nil
 	}
-	cs.closePNotify()
-}
-
-func (cs *unarySession) closeNotify() {
-	defer func() {
-		recover()
-	}()
-
-	close(cs.notifyNotify)
-}
-
-func (cs *unarySession) closePNotify() {
-	defer func() {
-		recover()
-	}()
-
-	close(cs.pnotify)
 }
 
 func (cs *unarySession) done() <-chan struct{} {
