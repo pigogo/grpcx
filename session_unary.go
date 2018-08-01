@@ -121,7 +121,7 @@ type unarySession struct {
 	put func()
 
 	pnotify      chan struct{}
-	notifyNotify chan struct{}
+	notifyCh chan struct{}
 	goawayCh     chan struct{}
 	packet       *netPack
 	state        unaryState
@@ -305,19 +305,19 @@ func (cs *unarySession) finish() {
 		cs.put = nil
 	}
 
-	if cs.notifyNotify != nil {
-		close(cs.notifyNotify)
-		cs.notifyNotify = nil
+	if cs.notifyCh != nil {
+		close(cs.notifyCh)
+		cs.notifyCh = nil
 	}
 }
 
 func (cs *unarySession) done() <-chan struct{} {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	if cs.notifyNotify == nil {
-		cs.notifyNotify = make(chan struct{})
+	if cs.notifyCh == nil {
+		cs.notifyCh = make(chan struct{})
 	}
-	return cs.notifyNotify
+	return cs.notifyCh
 }
 
 func (cs *unarySession) error() error {

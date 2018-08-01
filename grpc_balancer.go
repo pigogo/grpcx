@@ -57,6 +57,9 @@ type BalancerGetOptions struct {
 	BlockingWait bool
 	// HashKey only work in hash balancer which specifies the key for hash op
 	HashKey int64
+	// HashStrKey only work in hash balancer if and only if HashKey's val is 0 which
+	// used to cal a crc32 val
+	HashStrKey string
 }
 
 // Balancer chooses network addresses for RPCs.

@@ -24,14 +24,9 @@ func NewRoundRobinBalancer(resolver discover.ResolverAPI) grpcx.Balancer {
 	return rr
 }
 
-type serviceInfo struct {
-	addr      string
-	connected bool
-}
-
 type roundRoubin struct {
 	resolver   discover.ResolverAPI
-	sinfo      []serviceInfo
+	sinfo      []*serviceInfo
 	config     grpcx.BalancerConfig
 	mux        sync.RWMutex
 	next       uint32
@@ -115,7 +110,7 @@ func (rr *roundRoubin) Get(ctx context.Context, opts grpcx.BalancerGetOptions) (
 		if !opts.BlockingWait {
 			defer rr.mux.Unlock()
 			if len(rr.sinfo) == 0 {
-				err = fmt.Errorf("grpcx: roundRoubin there is no addr available")
+				err = errNoService
 				return
 			}
 			addr = rr.sinfo[rr.next].addr
@@ -155,10 +150,12 @@ func (rr *roundRoubin) Notify() <-chan []string {
 
 // Close shuts down the balancer.
 func (rr *roundRoubin) Close() (err error) {
+	rr.mux.Lock()
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("grpcx: roudRoubin close recover:%v", r)
 		}
+		rr.mux.Unlock()
 	}()
 	close(rr.stopCh)
 	rr.unsub()
@@ -175,7 +172,7 @@ func (rr *roundRoubin) watch() {
 
 		//renew the addr list
 		rr.mux.Lock()
-		var sinfos []serviceInfo
+		var sinfos []*serviceInfo
 		for _, addr := range newAddrs {
 			bexist := false
 			for _, sinfo := range rr.sinfo {
@@ -187,7 +184,7 @@ func (rr *roundRoubin) watch() {
 			}
 
 			if !bexist {
-				sinfos = append(sinfos, serviceInfo{
+				sinfos = append(sinfos, &serviceInfo{
 					addr: addr,
 				})
 			}
