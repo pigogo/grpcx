@@ -97,13 +97,25 @@ func (rr *roundRoubin) Get(ctx context.Context, opts grpcx.BalancerGetOptions) (
 			rr.next = 0
 		}
 
-		next := rr.next
-		for next != rr.next {
-			if rr.sinfo[next].connected {
-				rr.next++
-				addr = rr.sinfo[next].addr
-				rr.mux.Unlock()
-				return
+		if len(rr.sinfo) > 0 {
+			next := rr.next
+			for {
+				if rr.sinfo[next].connected {
+					rr.next++
+					addr = rr.sinfo[next].addr
+					rr.mux.Unlock()
+					return
+				}
+
+				next++
+				if next >= uint32(len(rr.sinfo)) {
+					next = 0
+				}
+
+				//finish cicel check
+				if next == rr.next {
+					break
+				}
 			}
 		}
 
@@ -113,6 +125,7 @@ func (rr *roundRoubin) Get(ctx context.Context, opts grpcx.BalancerGetOptions) (
 				err = errNoService
 				return
 			}
+
 			addr = rr.sinfo[rr.next].addr
 			rr.next++
 			return

@@ -127,23 +127,31 @@ func (cb *consistentHaser) hashKey(key string) uint32 {
 
 func (cb *consistentHaser) Get(ctx context.Context, opts grpcx.BalancerGetOptions) (addr string, put func(), err error) {
 	for {
+		offset := 0
 		cb.mux.RLock()
-		if cb.count == 0 {
-			cb.mux.RUnlock()
-			err = errNoService
-			return
-		}
+		if cb.count > 0 {
+			offset = cb.serach(opts.HashKey)
+			for i := offset; ; {
+				if cb.cicleSrv[cb.sortedHashVal[i]].connected {
+					addr = cb.cicleSrv[cb.sortedHashVal[i]].addr
+					cb.mux.RUnlock()
+					return
+				}
 
-		offset := cb.serach(opts.HashKey)
-		for i := offset; i != offset; {
-			if cb.cicleSrv[cb.sortedHashVal[i]].connected {
-				addr = cb.cicleSrv[cb.sortedHashVal[i]].addr
-				cb.mux.RUnlock()
-				return
+				i = (i + 1) % cb.count
+				//finish cicle check
+				if i == offset {
+					break
+				}
 			}
 		}
 
 		if !opts.BlockingWait {
+			if cb.count == 0 {
+				err = errNoService
+				return
+			}
+
 			addr = cb.cicleSrv[cb.sortedHashVal[offset]].addr
 			cb.mux.RUnlock()
 			return
@@ -152,11 +160,19 @@ func (cb *consistentHaser) Get(ctx context.Context, opts grpcx.BalancerGetOption
 		var waitCh chan struct{}
 		if cb.waitCh != nil {
 			waitCh = cb.waitCh
+			cb.mux.RUnlock()
 		} else {
-			waitCh = make(chan struct{})
-			cb.waitCh = waitCh
+			cb.mux.RUnlock()
+			cb.mux.Lock()
+			if cb.waitCh != nil {
+				waitCh = cb.waitCh
+			} else {
+				waitCh = make(chan struct{})
+				cb.waitCh = waitCh
+			}
+			cb.mux.Unlock()
 		}
-		cb.mux.RUnlock()
+
 	waitLoop:
 		for {
 			select {
@@ -188,7 +204,6 @@ func (cb *consistentHaser) Close() (err error) {
 		}
 		cb.mux.Unlock()
 	}()
-
 	close(cb.stopCh)
 	cb.unsub()
 	cb.count = 0
