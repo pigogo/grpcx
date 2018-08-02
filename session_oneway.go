@@ -4,8 +4,8 @@
 package grpcx
 
 import (
-	"golang.org/x/net/context"
 	xlog "github.com/pigogo/grpcx/grpclog"
+	"golang.org/x/net/context"
 )
 
 type oneState byte
@@ -33,8 +33,13 @@ func newOnewaySession(ctx context.Context, cc *ClientConn, method string, opts .
 		}
 	}
 	c.maxSendMessageSize = getMaxSize(mc.MaxReqSize, c.maxSendMessageSize, defaultClientMaxSendMessageSize)
+	hkey := uint32(0)
+	if c.hbKey != nil {
+		hkey = *c.hbKey
+	}
 	gopts := BalancerGetOptions{
 		BlockingWait: !c.failFast,
+		HashKey:      hkey,
 	}
 
 	getConn := func() (*connDial, func(), error) {

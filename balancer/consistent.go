@@ -126,8 +126,6 @@ func (cb *consistentHaser) hashKey(key string) uint32 {
 }
 
 func (cb *consistentHaser) Get(ctx context.Context, opts grpcx.BalancerGetOptions) (addr string, put func(), err error) {
-	hval := cb.hashKey(opts.HashStrKey)
-
 	for {
 		cb.mux.RLock()
 		if cb.count == 0 {
@@ -136,7 +134,7 @@ func (cb *consistentHaser) Get(ctx context.Context, opts grpcx.BalancerGetOption
 			return
 		}
 
-		offset := cb.serach(hval)
+		offset := cb.serach(opts.HashKey)
 		for i := offset; i != offset; {
 			if cb.cicleSrv[cb.sortedHashVal[i]].connected {
 				addr = cb.cicleSrv[cb.sortedHashVal[i]].addr

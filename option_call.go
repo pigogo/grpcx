@@ -21,10 +21,16 @@
 
 package grpcx
 
+import (
+	"hash/crc32"
+	"unsafe"
+)
+
 // callInfo contains all related configuration and information about an RPC.
 type callInfo struct {
 	failFast              bool
 	token                 *int64
+	hbKey                 *uint32
 	maxReceiveMessageSize *int
 	maxSendMessageSize    *int
 }
@@ -99,11 +105,44 @@ func MaxCallSendMsgSize(s int) CallOption {
 }
 
 // WithToken return a CallOption which set the service channel hash token
-// set the option if and only if the request must be serve as request order
+// set the option if and only if the request must be serve in the same channel
 // in the server
 func WithToken(token int64) CallOption {
 	return beforeCall(func(o *callInfo) error {
 		o.token = &token
+		return nil
+	})
+}
+
+// WithHBalancerStrKey return a CallOption which set the consistent string hash key
+func WithHBalancerStrKey(key string) CallOption {
+	hval := uint32(0)
+	if n := len(key); n < 64 {
+		var slicingUpdate [64]byte
+		copy(slicingUpdate[:], []byte(key)[:])
+		hval = crc32.ChecksumIEEE(slicingUpdate[:n])
+	} else {
+		hval = crc32.ChecksumIEEE([]byte(key))
+	}
+
+	return beforeCall(func(o *callInfo) error {
+		o.hbKey = &hval
+		return nil
+	})
+}
+
+// WithHBalancerKey return a CallOption which set the consistent integer hash key
+// the key will be used to cal a crc32 val
+func WithHBalancerKey(key int64) CallOption {
+	hval := uint32(0)
+	if key > 0 {
+		var slicingUpdate [64]byte
+		copy(slicingUpdate[:], (*[8]byte)(unsafe.Pointer(&key))[:])
+		hval = crc32.ChecksumIEEE(slicingUpdate[:8])
+	}
+
+	return beforeCall(func(o *callInfo) error {
+		o.hbKey = &hval
 		return nil
 	})
 }

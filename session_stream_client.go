@@ -72,9 +72,13 @@ func newClientStream(ctx context.Context, desc *StreamDesc, cc *ClientConn, meth
 	}
 	c.maxSendMessageSize = getMaxSize(mc.MaxReqSize, c.maxSendMessageSize, defaultClientMaxSendMessageSize)
 	c.maxReceiveMessageSize = getMaxSize(mc.MaxRespSize, c.maxReceiveMessageSize, defaultClientMaxReceiveMessageSize)
-
+	hkey := uint32(0)
+	if c.hbKey != nil {
+		hkey = *c.hbKey
+	}
 	gopts := BalancerGetOptions{
 		BlockingWait: !c.failFast,
+		HashKey:      hkey,
 	}
 
 	conn, put, err = cc.getConn(ctx, gopts)

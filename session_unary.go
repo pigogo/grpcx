@@ -51,8 +51,14 @@ func newUnarySession(ctx context.Context, cc *ClientConn, method string, opts ..
 	}
 	c.maxSendMessageSize = getMaxSize(mc.MaxReqSize, c.maxSendMessageSize, defaultClientMaxSendMessageSize)
 	c.maxReceiveMessageSize = getMaxSize(mc.MaxRespSize, c.maxReceiveMessageSize, defaultClientMaxReceiveMessageSize)
+
+	hkey := uint32(0)
+	if c.hbKey != nil {
+		hkey = *c.hbKey
+	}
 	gopts := BalancerGetOptions{
 		BlockingWait: !c.failFast,
+		HashKey:      hkey,
 	}
 
 	getConn := func() (*connDial, func(), error) {
@@ -120,12 +126,12 @@ type unarySession struct {
 	mu  sync.Mutex
 	put func()
 
-	pnotify      chan struct{}
-	notifyCh chan struct{}
-	goawayCh     chan struct{}
-	packet       *netPack
-	state        unaryState
-	resendTimes  int
+	pnotify     chan struct{}
+	notifyCh    chan struct{}
+	goawayCh    chan struct{}
+	packet      *netPack
+	state       unaryState
+	resendTimes int
 }
 
 func (cs *unarySession) Context() context.Context {
